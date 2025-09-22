@@ -2,94 +2,93 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Search, Plus, FileText, Folder, Menu, X, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { listEntries, createNote, createFolder, deleteEntry, type Entry } from "@/lib/tauri-api"
 
 interface SidebarProps {
   collapsed: boolean
   onToggle: () => void
   selectedNote: string | null
   onSelectNote: (noteId: string | null) => void
+  vaultPath: string
 }
 
-interface Note {
-  id: string
-  title: string
-  content: string
-  createdAt: Date
-  folder?: string
-}
-
-export function Sidebar({ collapsed, onToggle, selectedNote, onSelectNote }: SidebarProps) {
+export function Sidebar({ collapsed, onToggle, selectedNote, onSelectNote, vaultPath }: SidebarProps) {
   const [searchQuery, setSearchQuery] = useState("")
-  const [notes, setNotes] = useState<Note[]>([
-    {
-      id: "1",
-      title: "Welcome to Tau",
-      content: "# Welcome to Tau\n\nThis is your first note. Start writing!",
-      createdAt: new Date(Date.now() - 86400000), // 1 day ago
-      folder: "Getting Started",
-    },
-    {
-      id: "2",
-      title: "Quick Notes",
-      content: "# Quick Notes\n\nJot down your thoughts here.",
-      createdAt: new Date(Date.now() - 3600000), // 1 hour ago
-    },
-    {
-      id: "3",
-      title: "Meeting Notes",
-      content: "# Meeting Notes\n\n## Action Items\n- Follow up on project timeline\n- Review budget proposal",
-      createdAt: new Date(Date.now() - 1800000), // 30 minutes ago
-      folder: "Work",
-    },
-    {
-      id: "4",
-      title: "Ideas",
-      content: "# Ideas\n\n- New app concept\n- Weekend project thoughts",
-      createdAt: new Date(), // Just now
-    },
-  ])
+  const [entries, setEntries] = useState<Entry[]>([])
+  const [isLoading, setIsLoading] = useState(false)
 
-  const createNewNote = () => {
-    const newNote: Note = {
-      id: Date.now().toString(),
-      title: "Untitled",
-      content: "# Untitled\n\n",
-      createdAt: new Date(),
+  // Load entries from vault
+  useEffect(() => {
+    loadEntries()
+  }, [vaultPath])
+
+  const loadEntries = async () => {
+    try {
+      setIsLoading(true)
+      const vaultEntries = await listEntries()
+      setEntries(vaultEntries)
+    } catch (error) {
+      console.error("Failed to load entries:", error)
+    } finally {
+      setIsLoading(false)
     }
-    setNotes([newNote, ...notes])
-    onSelectNote(newNote.id)
   }
 
-  const deleteNote = (noteId: string, e: React.MouseEvent) => {
+  const createNewNote = async () => {
+    try {
+      const fileName = `Untitled-${Date.now()}.md`
+      await createNote(fileName)
+      await loadEntries() // Refresh the list
+      onSelectNote(fileName)
+    } catch (error) {
+      console.error("Failed to create note:", error)
+      alert("Failed to create note")
+    }
+  }
+
+  const createNewFolder = async () => {
+    const folderName = prompt("Enter folder name:")
+    if (!folderName?.trim()) return
+    
+    try {
+      await createFolder(folderName)
+      await loadEntries() // Refresh the list
+    } catch (error) {
+      console.error("Failed to create folder:", error)
+      alert("Failed to create folder")
+    }
+  }
+
+  const deleteItem = async (path: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    setNotes(notes.filter((note) => note.id !== noteId))
-    if (selectedNote === noteId) {
-      onSelectNote(null)
+    if (!confirm("Are you sure you want to delete this item?")) return
+    
+    try {
+      await deleteEntry(path)
+      await loadEntries() // Refresh the list
+      if (selectedNote === path) {
+        onSelectNote(null)
+      }
+    } catch (error) {
+      console.error("Failed to delete item:", error)
+      alert("Failed to delete item")
     }
   }
 
-  const filteredNotes = notes.filter(
-    (note) =>
-      note.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      note.content.toLowerCase().includes(searchQuery.toLowerCase()),
+  // Filter entries based on search
+  const filteredEntries = entries.filter((entry) =>
+    entry.name.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const recentNotes = [...notes].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 5)
-
-  const groupedNotes = filteredNotes.reduce(
-    (acc, note) => {
-      const folder = note.folder || "Uncategorized"
-      if (!acc[folder]) acc[folder] = []
-      acc[folder].push(note)
-      return acc
-    },
-    {} as Record<string, Note[]>,
-  )
+  // Separate files and folders
+  const files = filteredEntries.filter(entry => !entry.is_dir && entry.name.endsWith('.md'))
+  const folders = filteredEntries.filter(entry => entry.is_dir)
+  const recentFiles = files.slice(0, 5) // Show recent files
 
   if (collapsed) {
     return (
@@ -124,90 +123,115 @@ export function Sidebar({ collapsed, onToggle, selectedNote, onSelectNote }: Sid
           />
         </div>
 
-        <Button
-          onClick={createNewNote}
-          className="w-full bg-sidebar-primary hover:bg-sidebar-primary/90 text-sidebar-primary-foreground"
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          New Note
-        </Button>
+        <div className="space-y-2">
+          <Button
+            onClick={createNewNote}
+            className="w-full bg-sidebar-primary hover:bg-sidebar-primary/90 text-sidebar-primary-foreground"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            New Note
+          </Button>
+          <Button
+            onClick={createNewFolder}
+            variant="outline"
+            className="w-full"
+          >
+            <Folder className="h-4 w-4 mr-2" />
+            New Folder
+          </Button>
+        </div>
       </div>
 
       <ScrollArea className="flex-1 p-2">
-        <div className="mb-6">
-          <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
-            <FileText className="h-4 w-4" />
-            Recent Notes
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <div className="text-sm text-muted-foreground">Loading...</div>
           </div>
-          <div className="space-y-1 ml-2">
-            {recentNotes.map((note) => (
-              <div
-                key={`recent-${note.id}`}
-                onClick={() => onSelectNote(note.id)}
-                className={`group flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors ${
-                  selectedNote === note.id
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "hover:bg-sidebar-accent/50 text-sidebar-foreground"
-                }`}
-              >
-                <div className="flex items-center gap-2 flex-1 min-w-0">
-                  <FileText className="h-4 w-4 flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <span className="truncate text-sm block">{note.title}</span>
-                    <span className="text-xs text-muted-foreground">{note.createdAt.toLocaleDateString()}</span>
-                  </div>
+        ) : (
+          <>
+            {/* Folders */}
+            {folders.length > 0 && (
+              <div className="mb-6">
+                <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
+                  <Folder className="h-4 w-4" />
+                  Folders
                 </div>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6 hover:bg-sidebar-accent"
-                    onClick={(e) => deleteNote(note.id, e)}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
+                <div className="space-y-1 ml-2">
+                  {folders.map((folder) => (
+                    <div
+                      key={folder.path}
+                      className="group flex items-center justify-between p-2 rounded-md hover:bg-sidebar-accent/50 cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <Folder className="h-4 w-4 flex-shrink-0 text-blue-500" />
+                        <span className="truncate text-sm text-sidebar-foreground">{folder.name}</span>
+                      </div>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 hover:bg-sidebar-accent"
+                          onClick={(e) => deleteItem(folder.path, e)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
+            )}
 
-        {Object.entries(groupedNotes).map(([folder, folderNotes]) => (
-          <div key={folder} className="mb-4">
-            <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
-              <Folder className="h-4 w-4" />
-              {folder}
-            </div>
-            <div className="space-y-1 ml-2">
-              {folderNotes.map((note) => (
-                <div
-                  key={note.id}
-                  onClick={() => onSelectNote(note.id)}
-                  className={`group flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors ${
-                    selectedNote === note.id
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "hover:bg-sidebar-accent/50 text-sidebar-foreground"
-                  }`}
-                >
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <FileText className="h-4 w-4 flex-shrink-0" />
-                    <span className="truncate text-sm">{note.title}</span>
-                  </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 hover:bg-sidebar-accent"
-                      onClick={(e) => deleteNote(note.id, e)}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
+            {/* Files */}
+            {files.length > 0 && (
+              <div className="mb-6">
+                <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
+                  <FileText className="h-4 w-4" />
+                  Notes ({files.length})
                 </div>
-              ))}
-            </div>
-          </div>
-        ))}
+                <div className="space-y-1 ml-2">
+                  {files.map((file) => (
+                    <div
+                      key={file.path}
+                      onClick={() => onSelectNote(file.path)}
+                      className={`group flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors ${
+                        selectedNote === file.path
+                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                          : "hover:bg-sidebar-accent/50 text-sidebar-foreground"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <FileText className="h-4 w-4 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <span className="truncate text-sm block">{file.name.replace('.md', '')}</span>
+                          <span className="text-xs text-muted-foreground">{file.modified}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 hover:bg-sidebar-accent"
+                          onClick={(e) => deleteItem(file.path, e)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {!isLoading && files.length === 0 && folders.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <Folder className="h-12 w-12 text-muted-foreground mb-4" />
+                <p className="text-sm text-muted-foreground mb-2">No files yet</p>
+                <p className="text-xs text-muted-foreground">Create your first note to get started!</p>
+              </div>
+            )}
+          </>
+        )}
       </ScrollArea>
     </aside>
   )

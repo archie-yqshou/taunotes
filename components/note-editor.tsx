@@ -4,31 +4,122 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Eye, Edit3, Split } from "lucide-react"
+import { readNote, writeNote, renameEntry } from "@/lib/tauri-api"
 
 interface NoteEditorProps {
   selectedNote: string | null
+  vaultPath: string
+  onNoteRenamed?: (oldPath: string, newPath: string) => void
+  shouldStartEditing?: boolean
+  onEditingStarted?: () => void
 }
 
-export function NoteEditor({ selectedNote }: NoteEditorProps) {
+export function NoteEditor({ selectedNote, vaultPath, onNoteRenamed, shouldStartEditing, onEditingStarted }: NoteEditorProps) {
   const [content, setContent] = useState("")
   const [title, setTitle] = useState("")
   const [viewMode, setViewMode] = useState<"edit" | "preview" | "live">("edit")
   const [isEditing, setIsEditing] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [originalTitle, setOriginalTitle] = useState("")
 
   useEffect(() => {
     if (selectedNote) {
-      // In a real app, you'd fetch the note content here
-      setContent(
-        "# Welcome to Tau\n\nThis is your note content. Start editing to see the magic happen!\n\n## Features\n\n- **Clean interface** inspired by Obsidian\n- **Markdown support** for rich formatting\n- **Dark/Light themes** for comfortable writing\n- **Organized sidebar** for easy navigation\n\n## Getting Started\n\n1. Click the edit button to start writing\n2. Use markdown syntax for formatting\n3. Toggle preview to see your formatted content\n4. Create new notes with the + button\n\n---\n\n*Happy writing!*",
-      )
-      setTitle("Welcome to Tau")
-      setIsEditing(false)
+      loadNote(selectedNote)
     } else {
       setContent("")
       setTitle("")
       setIsEditing(false)
+      setHasUnsavedChanges(false)
     }
   }, [selectedNote])
+
+  const loadNote = async (notePath: string) => {
+    try {
+      setIsLoading(true)
+      const noteContent = await readNote(notePath)
+      setContent(noteContent)
+      const fileName = notePath.replace('.md', '').split(/[\\/]/).pop() || "Untitled"
+      setTitle(fileName)
+      setOriginalTitle(fileName)
+      setIsEditing(false)
+      setHasUnsavedChanges(false)
+    } catch (error) {
+      console.error("Failed to load note:", error)
+      setContent("# Error\n\nFailed to load this note.")
+      setTitle("Error")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const saveNote = async () => {
+    if (!selectedNote) return
+    
+    try {
+      // Save title if changed
+      await saveTitle()
+      
+      // Save content
+      await writeNote(selectedNote, content)
+      setHasUnsavedChanges(false)
+      console.log("Note saved successfully")
+    } catch (error) {
+      console.error("Failed to save note:", error)
+      alert("Failed to save note")
+    }
+  }
+
+  const handleContentChange = (newContent: string) => {
+    setContent(newContent)
+    setHasUnsavedChanges(true)
+  }
+
+  const handleTitleChange = (newTitle: string) => {
+    setTitle(newTitle)
+    if (newTitle !== originalTitle) {
+      setHasUnsavedChanges(true)
+    }
+  }
+
+  const saveTitle = async () => {
+    if (!selectedNote || title === originalTitle) return
+    
+    try {
+      const directory = selectedNote.includes('/') || selectedNote.includes('\\') 
+        ? selectedNote.substring(0, selectedNote.lastIndexOf(selectedNote.includes('/') ? '/' : '\\') + 1)
+        : ''
+      const newPath = directory + title + '.md'
+      
+      await renameEntry(selectedNote, newPath)
+      setOriginalTitle(title)
+      onNoteRenamed?.(selectedNote, newPath)
+      console.log("File renamed successfully")
+    } catch (error) {
+      console.error("Failed to rename file:", error)
+      alert("Failed to rename file")
+      setTitle(originalTitle) // Revert title on error
+    }
+  }
+
+  // Auto-save after 2 seconds of no typing
+  useEffect(() => {
+    if (!hasUnsavedChanges || !selectedNote) return
+    
+    const timer = setTimeout(() => {
+      saveNote()
+    }, 2000)
+    
+    return () => clearTimeout(timer)
+  }, [content, hasUnsavedChanges, selectedNote])
+
+  // Auto-start editing for new notes
+  useEffect(() => {
+    if (shouldStartEditing && selectedNote) {
+      setIsEditing(true)
+      onEditingStarted?.()
+    }
+  }, [shouldStartEditing, selectedNote, onEditingStarted])
 
   const renderMarkdown = (text: string) => {
     return text
@@ -71,11 +162,23 @@ export function NoteEditor({ selectedNote }: NoteEditorProps) {
           <input
             type="text"
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => handleTitleChange(e.target.value)}
+            onBlur={saveTitle}
+            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
             className="text-lg font-semibold bg-transparent border-none outline-none text-foreground placeholder:text-muted-foreground"
             placeholder="Untitled"
             disabled={!isEditing}
           />
+          {hasUnsavedChanges && (
+            <span className="text-xs text-orange-500 bg-orange-100 dark:bg-orange-900 px-2 py-1 rounded">
+              Unsaved
+            </span>
+          )}
+          {isLoading && (
+            <span className="text-xs text-blue-500 bg-blue-100 dark:bg-blue-900 px-2 py-1 rounded">
+              Loading...
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -105,10 +208,25 @@ export function NoteEditor({ selectedNote }: NoteEditorProps) {
             <Eye className="h-4 w-4 mr-2" />
             Preview
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setIsEditing(!isEditing)} className="hover:bg-accent">
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            onClick={() => setIsEditing(!isEditing)} 
+            className="hover:bg-accent"
+          >
             <Edit3 className="h-4 w-4 mr-2" />
             {isEditing ? "Done" : "Edit"}
           </Button>
+          {hasUnsavedChanges && (
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={saveNote}
+              className="hover:bg-accent"
+            >
+              Save
+            </Button>
+          )}
         </div>
       </div>
 
@@ -119,7 +237,7 @@ export function NoteEditor({ selectedNote }: NoteEditorProps) {
               <div className="h-full p-6">
                 <Textarea
                   value={content}
-                  onChange={(e) => setContent(e.target.value)}
+                  onChange={(e) => handleContentChange(e.target.value)}
                   placeholder="Start writing your note..."
                   className="w-full h-full resize-none border-none bg-transparent text-foreground placeholder:text-muted-foreground focus:ring-0 text-base leading-relaxed"
                   disabled={!isEditing}
@@ -146,7 +264,7 @@ export function NoteEditor({ selectedNote }: NoteEditorProps) {
           <div className="h-full p-8">
             <Textarea
               value={content}
-              onChange={(e) => setContent(e.target.value)}
+              onChange={(e) => handleContentChange(e.target.value)}
               placeholder="Start writing your note..."
               className="w-full h-full resize-none border-none bg-transparent text-foreground placeholder:text-muted-foreground focus:ring-0 text-base leading-relaxed"
               disabled={!isEditing}
