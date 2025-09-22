@@ -1,11 +1,10 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { VaultPicker } from './VaultPicker'
 import { Sidebar } from './Sidebar'
 import { Editor } from './Editor'
 import { Toolbar } from './Toolbar'
 import { setVault, getVault, createFolder } from '../lib/api'
 import { getSettings, saveSettings, initializeTheme } from '../lib/storage'
-import { cn } from '../lib/utils'
 
 export function AppShell() {
   const [vaultPath, setVaultPath] = useState<string | null>(null)
@@ -87,7 +86,6 @@ export function AppShell() {
 
   const handleNoteSelected = (notePath: string) => {
     setCurrentNote(notePath)
-    const settings = getSettings()
     saveSettings({ lastOpenedNote: notePath })
   }
 
