@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { listEntries, createNote, createFolder, deleteEntry, renameEntry, type Entry } from "@/lib/tauri-api"
+import { cn } from "@/lib/utils"
 
 interface EnhancedSidebarProps {
   collapsed: boolean
@@ -39,6 +40,7 @@ export function EnhancedSidebar({
   const [isLoading, setIsLoading] = useState(false)
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([])
   const [draggedItem, setDraggedItem] = useState<string | null>(null)
+  const [dragOverFolder, setDragOverFolder] = useState<string | null>(null)
   const [recentNotes, setRecentNotes] = useState<Entry[]>([])
 
   // Load entries from vault
@@ -170,9 +172,17 @@ export function EnhancedSidebar({
     e.dataTransfer.effectAllowed = 'move'
   }
 
-  const handleDragOver = (e: React.DragEvent) => {
+  const handleDragOver = (e: React.DragEvent, folderPath: string) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
+    setDragOverFolder(folderPath)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    // Only clear drag over if we're actually leaving the element
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDragOverFolder(null)
+    }
   }
 
   const handleDrop = async (e: React.DragEvent, targetFolderPath: string) => {
@@ -183,8 +193,9 @@ export function EnhancedSidebar({
     
     try {
       const fileName = draggedItem.split(/[\\/]/).pop()!
-      const newPath = targetFolderPath + '/' + fileName
+      const newPath = targetFolderPath + (targetFolderPath.endsWith('/') || targetFolderPath.endsWith('\\') ? '' : '/') + fileName
       
+      console.log("Moving file from", draggedItem, "to", newPath)
       await renameEntry(draggedItem, newPath)
       await loadEntries()
       
@@ -194,9 +205,10 @@ export function EnhancedSidebar({
       }
     } catch (error) {
       console.error("Failed to move file:", error)
-      alert("Failed to move file")
+      alert(`Failed to move file: ${error}`)
     } finally {
       setDraggedItem(null)
+      setDragOverFolder(null)
     }
   }
 
@@ -221,9 +233,29 @@ export function EnhancedSidebar({
             }
           }}
           draggable={isMarkdownFile}
-          onDragStart={(e) => isMarkdownFile && handleDragStart(e, node.entry.path)}
-          onDragOver={node.entry.is_dir ? handleDragOver : undefined}
-          onDrop={node.entry.is_dir ? (e) => handleDrop(e, node.entry.path) : undefined}
+          onDragStart={(e) => {
+            if (isMarkdownFile) {
+              console.log("Starting drag for:", node.entry.path)
+              handleDragStart(e, node.entry.path)
+            }
+          }}
+          onDragOver={node.entry.is_dir ? (e) => {
+            console.log("Drag over folder:", node.entry.path)
+            handleDragOver(e, node.entry.path)
+          } : undefined}
+          onDragLeave={node.entry.is_dir ? handleDragLeave : undefined}
+          onDrop={node.entry.is_dir ? (e) => {
+            console.log("Drop on folder:", node.entry.path)
+            handleDrop(e, node.entry.path)
+          } : undefined}
+          className={cn(
+            "group flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors",
+            isSelected
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "hover:bg-sidebar-accent/50 text-sidebar-foreground",
+            draggedItem === node.entry.path && "bg-blue-100 dark:bg-blue-900/30",
+            dragOverFolder === node.entry.path && node.entry.is_dir && "bg-blue-200 dark:bg-blue-800/50 border-2 border-dashed border-blue-400"
+          )}
         >
           <div className="flex items-center gap-2 flex-1 min-w-0">
             {node.entry.is_dir ? (
@@ -356,7 +388,13 @@ export function EnhancedSidebar({
                       key={`recent-${note.path}`}
                       onClick={() => onSelectNote(note.path)}
                       draggable
-                      onDragStart={(e) => handleDragStart(e, note.path)}
+                      onDragStart={(e) => {
+                        console.log("Starting drag for recent note:", note.path)
+                        handleDragStart(e, note.path)
+                      }}
+                      style={{
+                        backgroundColor: draggedItem === note.path ? 'rgba(59, 130, 246, 0.1)' : undefined
+                      }}
                       className={`group flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors ${
                         selectedNote === note.path
                           ? "bg-sidebar-accent text-sidebar-accent-foreground"

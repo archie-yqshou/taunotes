@@ -15,6 +15,7 @@ export default function HomePage() {
   const [isLoading, setIsLoading] = useState(true)
   const [showSettings, setShowSettings] = useState(false)
   const [shouldStartEditing, setShouldStartEditing] = useState(false)
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
 
   useEffect(() => {
     const checkVault = async () => {
@@ -64,8 +65,11 @@ export default function HomePage() {
               if (selectedNote === oldPath) {
                 setSelectedNote(newPath)
               }
+              // Force sidebar refresh when a file is renamed
+              setRefreshTrigger(prev => prev + 1)
             }}
             onShowSettings={() => setShowSettings(true)}
+            refreshTrigger={refreshTrigger}
           />
 
           <main className={`flex-1 flex flex-col transition-all duration-300 ${sidebarCollapsed ? "ml-12" : "ml-64"}`}>
@@ -85,6 +89,8 @@ export default function HomePage() {
                   if (selectedNote === oldPath) {
                     setSelectedNote(newPath)
                   }
+                  // Force sidebar refresh when a file is renamed from editor
+                  setRefreshTrigger(prev => prev + 1)
                 }}
                 shouldStartEditing={shouldStartEditing}
                 onEditingStarted={() => setShouldStartEditing(false)}
