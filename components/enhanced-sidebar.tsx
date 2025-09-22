@@ -1,7 +1,8 @@
 "use client"
 
 import React, { useState, useEffect } from "react"
-import { Search, Plus, FileText, Folder, Menu, X, Trash2, ChevronDown, ChevronRight, Settings, Clock } from "lucide-react"
+import { DndContext, DragEndEvent, closestCenter, useSensor, useSensors, PointerSensor, useDraggable, useDroppable } from '@dnd-kit/core'
+import { Search, Plus, FileText, FolderOpen, FolderClosed, Menu, X, Trash2, ChevronDown, ChevronRight, Settings, Clock } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -42,6 +43,13 @@ export function EnhancedSidebar({
   const [draggedItem, setDraggedItem] = useState<string | null>(null)
   const [dragOverFolder, setDragOverFolder] = useState<string | null>(null)
   const [recentNotes, setRecentNotes] = useState<Entry[]>([])
+  const [isDragging, setIsDragging] = useState(false)
+  const [activeId, setActiveId] = useState<string | null>(null)
+
+  // dnd-kit sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 3 } })
+  )
 
   // Load entries from vault
   useEffect(() => {
@@ -52,6 +60,25 @@ export function EnhancedSidebar({
   useEffect(() => {
     updateRecentNotes()
   }, [entries, selectedNote])
+
+  // Add global drag event listeners for debugging
+  useEffect(() => {
+    const handleGlobalDragOver = (e: DragEvent) => {
+      console.log("🌍 GLOBAL drag over - target:", e.target, "isDragging:", isDragging)
+    }
+    
+    const handleGlobalDrop = (e: DragEvent) => {
+      console.log("🌍 GLOBAL drop - target:", e.target)
+    }
+
+    document.addEventListener('dragover', handleGlobalDragOver)
+    document.addEventListener('drop', handleGlobalDrop)
+    
+    return () => {
+      document.removeEventListener('dragover', handleGlobalDragOver)
+      document.removeEventListener('drop', handleGlobalDrop)
+    }
+  }, [isDragging])
 
   const loadEntries = async () => {
     try {
@@ -80,10 +107,9 @@ export function EnhancedSidebar({
       nodeMap.set(entry.path, node)
     })
 
-    // Build tree structure - only for root level items when no search
+    // Build tree structure - only for root level items initially
     entries.forEach(entry => {
       const node = nodeMap.get(entry.path)!
-      // Only show root level items in tree (no nested paths)
       if (!entry.path.includes('/') && !entry.path.includes('\\')) {
         tree.push(node)
       }
@@ -101,6 +127,46 @@ export function EnhancedSidebar({
 
     sortNodes(tree)
     setFileTree(tree)
+  }
+
+  // Find a node by path
+  const findNodeByPath = (nodes: FileTreeNode[], targetPath: string): FileTreeNode | null => {
+    for (const node of nodes) {
+      if (node.entry.path === targetPath) return node
+      const found = findNodeByPath(node.children, targetPath)
+      if (found) return found
+    }
+    return null
+  }
+
+  // Replace children for a given node path
+  const replaceChildrenForPath = (nodes: FileTreeNode[], targetPath: string, newChildren: FileTreeNode[]): FileTreeNode[] => {
+    return nodes.map(node => {
+      if (node.entry.path === targetPath) {
+        return { ...node, children: newChildren, isExpanded: true }
+      }
+      if (node.children.length > 0) {
+        return { ...node, children: replaceChildrenForPath(node.children, targetPath, newChildren) }
+      }
+      return node
+    })
+  }
+
+  // Lazy-load folder contents when expanding
+  const loadChildrenForFolder = async (folderPath: string) => {
+    try {
+      const children = await listEntries(folderPath)
+      const childNodes: FileTreeNode[] = children.map(entry => ({ entry, children: [], isExpanded: false }))
+      // Sort children: folders first, then files
+      childNodes.sort((a, b) => {
+        if (a.entry.is_dir && !b.entry.is_dir) return -1
+        if (!a.entry.is_dir && b.entry.is_dir) return 1
+        return a.entry.name.localeCompare(b.entry.name)
+      })
+      setFileTree(prev => replaceChildrenForPath(prev, folderPath, childNodes))
+    } catch (error) {
+      console.error('Failed to load folder children:', error)
+    }
   }
 
   const updateRecentNotes = () => {
@@ -152,9 +218,17 @@ export function EnhancedSidebar({
   }
 
   const toggleFolder = (path: string) => {
-    setFileTree(prev => 
-      prev.map(node => updateNodeExpansion(node, path))
-    )
+    // Determine current state before toggling
+    const currentNode = findNodeByPath(fileTree, path)
+    const isCurrentlyExpanded = currentNode?.isExpanded
+    const hasChildrenLoaded = (currentNode?.children?.length || 0) > 0
+
+    setFileTree(prev => prev.map(node => updateNodeExpansion(node, path)))
+
+    // If we are expanding and children are not loaded, lazy-load them
+    if (!isCurrentlyExpanded && !hasChildrenLoaded) {
+      loadChildrenForFolder(path)
+    }
   }
 
   const updateNodeExpansion = (node: FileTreeNode, targetPath: string): FileTreeNode => {
@@ -168,20 +242,79 @@ export function EnhancedSidebar({
   }
 
   const handleDragStart = (e: React.DragEvent, filePath: string) => {
-    setDraggedItem(filePath)
+    console.log("🚀 Drag start:", filePath)
+
+    // Set data transfer FIRST - include multiple types for WebView2 compatibility
     e.dataTransfer.effectAllowed = 'move'
+    try { e.dataTransfer.setData('text/plain', filePath) } catch {}
+    try { e.dataTransfer.setData('text', filePath) } catch {}
+    try { e.dataTransfer.setData('application/x-file-path', filePath) } catch {}
+    try { e.dataTransfer.setData('text/uri-list', filePath) } catch {}
+
+    // Provide a drag image to prevent early cancellation in some engines
+    const dragImg = document.createElement('div')
+    dragImg.textContent = filePath.split(/[\\/]/).pop() || filePath
+    dragImg.style.position = 'absolute'
+    dragImg.style.top = '-1000px'
+    dragImg.style.left = '-1000px'
+    dragImg.style.background = 'rgba(0,0,0,0.75)'
+    dragImg.style.color = '#fff'
+    dragImg.style.padding = '2px 6px'
+    dragImg.style.fontSize = '12px'
+    dragImg.style.borderRadius = '4px'
+    dragImg.style.pointerEvents = 'none'
+    document.body.appendChild(dragImg)
+    try { e.dataTransfer.setDragImage(dragImg, 0, 0) } catch {}
+    setTimeout(() => {
+      if (dragImg.parentNode) dragImg.parentNode.removeChild(dragImg)
+    }, 0)
+
+    // Set state for UI feedback
+    setDraggedItem(filePath)
+    setIsDragging(true)
+    document.body.classList.add('dragging')
+
+    console.log("📦 Drag data set:", filePath)
+  }
+
+  const handleDragEnd = (e: React.DragEvent) => {
+    console.log("Drag end")
+    setDraggedItem(null)
+    setDragOverFolder(null)
+    setIsDragging(false)
+    document.body.classList.remove('dragging')
   }
 
   const handleDragOver = (e: React.DragEvent, folderPath: string) => {
     e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    setDragOverFolder(folderPath)
+    e.stopPropagation()
+    
+    console.log("🔄 DRAG OVER EVENT:", folderPath, "isDragging:", isDragging, "draggedItem:", draggedItem)
+    
+    // Check if we have drag data - this is more reliable than state
+    const dragData = e.dataTransfer.types.includes('text/plain')
+    console.log("   - Drag data present:", dragData)
+    console.log("   - DataTransfer types:", e.dataTransfer.types)
+    
+    // Always allow drop while we are in an active app drag
+    if (isDragging || draggedItem || dragData) {
+      e.dataTransfer.dropEffect = 'move'
+      setDragOverFolder(folderPath)
+      console.log("✅ Allowing drop on:", folderPath)
+    } else {
+      e.dataTransfer.dropEffect = 'none'
+      console.log("❌ No drag data, rejecting drop")
+    }
   }
 
   const handleDragLeave = (e: React.DragEvent) => {
+    console.log("📤 DRAG LEAVE - target:", e.currentTarget, "related:", e.relatedTarget)
     // Only clear drag over if we're actually leaving the element
     if (!e.currentTarget.contains(e.relatedTarget as Node)) {
       setDragOverFolder(null)
+      console.log("   ✅ Cleared drag over folder")
+    } else {
+      console.log("   ❌ Not clearing - still within element")
     }
   }
 
@@ -189,86 +322,103 @@ export function EnhancedSidebar({
     e.preventDefault()
     e.stopPropagation()
     
-    if (!draggedItem) return
+    console.log("🎯 Drop event triggered on:", targetFolderPath)
+    
+    const droppedPath = e.dataTransfer.getData('text/plain')
+    console.log("📥 Dropped file path:", droppedPath)
+    
+    if (!droppedPath) {
+      console.log("❌ No dragged item found in drop data")
+      return
+    }
+    
+    // Don't allow dropping on the same path
+    if (droppedPath === targetFolderPath) {
+      console.log("❌ Cannot drop on same path")
+      return
+    }
     
     try {
-      const fileName = draggedItem.split(/[\\/]/).pop()!
-      const newPath = targetFolderPath + (targetFolderPath.endsWith('/') || targetFolderPath.endsWith('\\') ? '' : '/') + fileName
+      const fileName = droppedPath.split(/[\\/]/).pop()!
+      // Ensure proper path separator
+      const separator = targetFolderPath.includes('\\') ? '\\' : '/'
+      const newPath = targetFolderPath + separator + fileName
       
-      console.log("Moving file from", draggedItem, "to", newPath)
-      await renameEntry(draggedItem, newPath)
+      console.log("🔄 Moving file from", droppedPath, "to", newPath)
+      await renameEntry(droppedPath, newPath)
       await loadEntries()
       
-      if (selectedNote === draggedItem) {
+      if (selectedNote === droppedPath) {
         onSelectNote(newPath)
-        onNoteRenamed?.(draggedItem, newPath)
+        onNoteRenamed?.(droppedPath, newPath)
       }
+      
+      console.log("✅ File moved successfully!")
     } catch (error) {
-      console.error("Failed to move file:", error)
+      console.error("❌ Failed to move file:", error)
       alert(`Failed to move file: ${error}`)
     } finally {
       setDraggedItem(null)
       setDragOverFolder(null)
+      setIsDragging(false)
+      document.body.classList.remove('dragging')
     }
   }
 
-  const renderFileTreeNode = (node: FileTreeNode, depth = 0) => {
+  const TreeNode: React.FC<{ node: FileTreeNode, depth: number }> = ({ node, depth }) => {
     const isSelected = selectedNote === node.entry.path
-    const hasChildren = node.children.length > 0
     const isMarkdownFile = !node.entry.is_dir && node.entry.name.endsWith('.md')
+    // Folder as droppable
+    const { setNodeRef: setDropRef, isOver } = useDroppable({ id: node.entry.path })
+    // File as draggable
+    const { attributes, listeners, setNodeRef: setDragRef, isDragging: isFileDragging } = useDraggable({ id: node.entry.path })
+
+    const containerProps: React.HTMLAttributes<HTMLDivElement> & { ref?: any } = {}
+    if (node.entry.is_dir) {
+      containerProps.ref = setDropRef
+    } else if (isMarkdownFile) {
+      containerProps.ref = setDragRef
+      Object.assign(containerProps, attributes, listeners)
+    }
 
     return (
       <div key={node.entry.path} style={{ marginLeft: `${depth * 12}px` }}>
         <div
-          className={`group flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors ${
-            isSelected
-              ? "bg-sidebar-accent text-sidebar-accent-foreground"
-              : "hover:bg-sidebar-accent/50 text-sidebar-foreground"
-          }`}
-          onClick={() => {
+          {...containerProps}
+          onClick={(e) => {
+            if (isDragging) {
+              e.preventDefault()
+              return
+            }
             if (node.entry.is_dir) {
               toggleFolder(node.entry.path)
             } else if (isMarkdownFile) {
               onSelectNote(node.entry.path)
             }
           }}
-          draggable={isMarkdownFile}
-          onDragStart={(e) => {
-            if (isMarkdownFile) {
-              console.log("Starting drag for:", node.entry.path)
-              handleDragStart(e, node.entry.path)
-            }
-          }}
-          onDragOver={node.entry.is_dir ? (e) => {
-            console.log("Drag over folder:", node.entry.path)
-            handleDragOver(e, node.entry.path)
-          } : undefined}
-          onDragLeave={node.entry.is_dir ? handleDragLeave : undefined}
-          onDrop={node.entry.is_dir ? (e) => {
-            console.log("Drop on folder:", node.entry.path)
-            handleDrop(e, node.entry.path)
-          } : undefined}
           className={cn(
-            "group flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors",
+            "group flex items-center justify-between p-2 rounded-md transition-colors select-none",
+            (isMarkdownFile ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"),
             isSelected
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
               : "hover:bg-sidebar-accent/50 text-sidebar-foreground",
-            draggedItem === node.entry.path && "bg-blue-100 dark:bg-blue-900/30",
-            dragOverFolder === node.entry.path && node.entry.is_dir && "bg-blue-200 dark:bg-blue-800/50 border-2 border-dashed border-blue-400"
+            isOver && node.entry.is_dir && "bg-blue-200 dark:bg-blue-800/50 border-2 border-dashed border-blue-400"
           )}
         >
-          <div className="flex items-center gap-2 flex-1 min-w-0">
+          <div className="flex items-center gap-1 flex-1 min-w-0">
             {node.entry.is_dir ? (
               <>
-                {hasChildren && (
-                  node.isExpanded ? 
-                    <ChevronDown className="h-4 w-4 flex-shrink-0" /> : 
-                    <ChevronRight className="h-4 w-4 flex-shrink-0" />
-                )}
-                <Folder className="h-4 w-4 flex-shrink-0 text-blue-500" />
-              </>
+                {node.isExpanded ? 
+                  <ChevronDown className="h-3 w-3 flex-shrink-0 text-muted-foreground" /> : 
+                  <ChevronRight className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
+                }
+                {node.isExpanded ? 
+                  <FolderOpen className="h-4 w-4 flex-shrink-0 text-blue-500" data-folder="true" /> :
+                  <FolderClosed className="h-4 w-4 flex-shrink-0 text-blue-500" data-folder="true" />
+                }
+            </>
             ) : (
-              <FileText className="h-4 w-4 flex-shrink-0" />
+              <FileText className="h-4 w-4 flex-shrink-0 text-muted-foreground ml-4" />
             )}
             <div className="flex-1 min-w-0">
               <span className="truncate text-sm block">
@@ -281,7 +431,6 @@ export function EnhancedSidebar({
               )}
             </div>
           </div>
-          
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <Button
               variant="ghost"
@@ -296,7 +445,18 @@ export function EnhancedSidebar({
 
         {node.entry.is_dir && node.isExpanded && (
           <div>
-            {node.children.map(child => renderFileTreeNode(child, depth + 1))}
+            {node.children.length > 0 ? (
+              node.children.map(child => (
+                <TreeNode key={child.entry.path} node={child} depth={depth + 1} />
+              ))
+            ) : (
+              <div 
+                style={{ marginLeft: `${(depth + 1) * 12}px` }}
+                className="p-2 text-xs text-muted-foreground italic"
+              >
+                Empty folder
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -325,7 +485,60 @@ export function EnhancedSidebar({
   }
 
   return (
-    <aside className="fixed left-0 top-0 h-full w-64 bg-sidebar border-r border-sidebar-border z-50 flex flex-col">
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={(e) => {
+        const id = (e.active?.id as string) || null
+        setActiveId(id)
+        setIsDragging(true)
+      }}
+      onDragEnd={async (e: DragEndEvent) => {
+        setIsDragging(false)
+        const sourcePath = e.active?.id as string
+        const overId = e.over?.id as string | undefined
+        setActiveId(null)
+        if (!sourcePath || !overId) return
+        // Only allow dropping onto folders
+        const targetNode = fileTree && findNodeByPath(fileTree, overId)
+        if (!targetNode || !targetNode.entry.is_dir) return
+        try {
+          const fileName = sourcePath.split(/[\\/]/).pop()!
+          const sep = overId.includes('\\') ? '\\' : '/'
+          const newPath = overId + sep + fileName
+          await renameEntry(sourcePath, newPath)
+          await loadEntries()
+          if (selectedNote === sourcePath) {
+            onSelectNote(newPath)
+            onNoteRenamed?.(sourcePath, newPath)
+          }
+        } catch (error) {
+          console.error('Failed to move via dnd-kit:', error)
+          alert(`Failed to move file: ${error}`)
+        }
+      }}
+      onDragCancel={() => {
+        setIsDragging(false)
+        setActiveId(null)
+      }}
+    >
+    <aside 
+      className={cn(
+        "fixed left-0 top-0 h-full w-64 bg-sidebar border-r border-sidebar-border z-50 flex flex-col",
+        isDragging && "drag-active"
+      )}
+      style={{
+        // Add custom CSS for drag states
+        '--drag-cursor': isDragging ? 'grabbing' : 'default'
+      } as React.CSSProperties}
+      onDragOverCapture={(e) => {
+        // Make the entire sidebar a permissive drop zone during in-app drags
+        if (isDragging) {
+          e.preventDefault()
+          try { (e as unknown as DragEvent).dataTransfer!.dropEffect = 'move' } catch {}
+        }
+      }}
+    >
       <div className="p-4 border-b border-sidebar-border">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-sidebar-foreground">Tau Notes</h2>
@@ -357,18 +570,26 @@ export function EnhancedSidebar({
             <Plus className="h-4 w-4 mr-2" />
             New Note
           </Button>
-          <Button
-            onClick={createNewFolder}
-            variant="outline"
-            className="w-full"
-          >
-            <Folder className="h-4 w-4 mr-2" />
-            New Folder
-          </Button>
+             <Button
+               onClick={createNewFolder}
+               variant="outline"
+               className="w-full"
+             >
+               <FolderClosed className="h-4 w-4 mr-2" />
+               New Folder
+             </Button>
         </div>
       </div>
 
-      <ScrollArea className="flex-1 p-2">
+      <ScrollArea 
+        className="flex-1 p-2"
+        onDragOverCapture={(e) => {
+          if (isDragging) {
+            e.preventDefault()
+            try { (e as unknown as DragEvent).dataTransfer!.dropEffect = 'move' } catch {}
+          }
+        }}
+      >
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
             <div className="text-sm text-muted-foreground">Loading...</div>
@@ -385,21 +606,24 @@ export function EnhancedSidebar({
                 <div className="space-y-1 ml-2">
                   {recentNotes.map((note) => (
                     <div
+                      id={`recent-${note.path}`}
                       key={`recent-${note.path}`}
                       onClick={() => onSelectNote(note.path)}
-                      draggable
-                      onDragStart={(e) => {
-                        console.log("Starting drag for recent note:", note.path)
-                        handleDragStart(e, note.path)
-                      }}
-                      style={{
-                        backgroundColor: draggedItem === note.path ? 'rgba(59, 130, 246, 0.1)' : undefined
-                      }}
-                      className={`group flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors ${
+                      className={cn(
+                        "group flex items-center justify-between p-2 rounded-md cursor-grab active:cursor-grabbing transition-colors",
                         selectedNote === note.path
                           ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                          : "hover:bg-sidebar-accent/50 text-sidebar-foreground"
-                      }`}
+                          : "hover:bg-sidebar-accent/50 text-sidebar-foreground",
+                        draggedItem === note.path && "bg-blue-100 dark:bg-blue-900/30 opacity-50"
+                      )}
+                      {...{
+                        role: 'button',
+                        onPointerDown: (ev: React.PointerEvent) => {
+                          // mark this as the active drag source for dnd-kit
+                          ;(ev.target as HTMLElement).dataset.dndId = note.path
+                        },
+                        onDragStart: (ev: React.DragEvent) => ev.preventDefault()
+                      }}
                     >
                       <div className="flex items-center gap-2 flex-1 min-w-0">
                         <FileText className="h-4 w-4 flex-shrink-0" />
@@ -428,10 +652,10 @@ export function EnhancedSidebar({
 
             {/* File Tree */}
             <div className="mb-6">
-              <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
-                <Folder className="h-4 w-4" />
-                Files
-              </div>
+               <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
+                 <FolderClosed className="h-4 w-4" />
+                 Files
+               </div>
               <div className="ml-2">
                 {searchQuery ? (
                   // Show filtered flat list when searching
@@ -451,11 +675,11 @@ export function EnhancedSidebar({
                         }`}
                       >
                         <div className="flex items-center gap-2 flex-1 min-w-0">
-                          {entry.is_dir ? (
-                            <Folder className="h-4 w-4 flex-shrink-0 text-blue-500" />
-                          ) : (
-                            <FileText className="h-4 w-4 flex-shrink-0" />
-                          )}
+                           {entry.is_dir ? (
+                             <FolderClosed className="h-4 w-4 flex-shrink-0 text-blue-500" data-folder="true" />
+                           ) : (
+                             <FileText className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                           )}
                           <span className="truncate text-sm">
                             {entry.is_dir ? entry.name : entry.name.replace('.md', '')}
                           </span>
@@ -476,22 +700,25 @@ export function EnhancedSidebar({
                 ) : (
                   // Show tree structure when not searching
                   <div>
-                    {fileTree.map(node => renderFileTreeNode(node))}
+                    {fileTree.map(node => (
+                      <TreeNode key={node.entry.path} node={node} depth={0} />
+                    ))}
                   </div>
                 )}
               </div>
             </div>
 
             {!isLoading && entries.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <Folder className="h-12 w-12 text-muted-foreground mb-4" />
-                <p className="text-sm text-muted-foreground mb-2">No files yet</p>
-                <p className="text-xs text-muted-foreground">Create your first note to get started!</p>
-              </div>
+               <div className="flex flex-col items-center justify-center py-12 text-center">
+                 <FolderClosed className="h-12 w-12 text-muted-foreground mb-4" />
+                 <p className="text-sm text-muted-foreground mb-2">No files yet</p>
+                 <p className="text-xs text-muted-foreground">Create your first note to get started!</p>
+               </div>
             )}
           </>
         )}
       </ScrollArea>
     </aside>
+    </DndContext>
   )
 }

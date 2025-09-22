@@ -17,8 +17,8 @@ export async function getVault(): Promise<string | null> {
   return invoke('get_vault')
 }
 
-export async function listEntries(): Promise<Entry[]> {
-  return invoke('list_entries')
+export async function listEntries(path?: string): Promise<Entry[]> {
+  return path ? invoke('list_entries', { path }) : invoke('list_entries')
 }
 
 // File operations
