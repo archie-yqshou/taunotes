@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Eye, Edit3 } from "lucide-react"
+import { Eye, Edit3, Split } from "lucide-react"
 
 interface NoteEditorProps {
   selectedNote: string | null
@@ -12,7 +12,7 @@ interface NoteEditorProps {
 export function NoteEditor({ selectedNote }: NoteEditorProps) {
   const [content, setContent] = useState("")
   const [title, setTitle] = useState("")
-  const [isPreview, setIsPreview] = useState(false)
+  const [viewMode, setViewMode] = useState<"edit" | "preview" | "live">("edit")
   const [isEditing, setIsEditing] = useState(false)
 
   useEffect(() => {
@@ -78,9 +78,32 @@ export function NoteEditor({ selectedNote }: NoteEditorProps) {
           />
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setIsPreview(!isPreview)} className="hover:bg-accent">
+          <Button
+            variant={viewMode === "edit" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setViewMode("edit")}
+            className="hover:bg-accent"
+          >
+            <Edit3 className="h-4 w-4 mr-2" />
+            Edit
+          </Button>
+          <Button
+            variant={viewMode === "live" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setViewMode("live")}
+            className="hover:bg-accent"
+          >
+            <Split className="h-4 w-4 mr-2" />
+            Live
+          </Button>
+          <Button
+            variant={viewMode === "preview" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setViewMode("preview")}
+            className="hover:bg-accent"
+          >
             <Eye className="h-4 w-4 mr-2" />
-            {isPreview ? "Edit" : "Preview"}
+            Preview
           </Button>
           <Button variant="ghost" size="sm" onClick={() => setIsEditing(!isEditing)} className="hover:bg-accent">
             <Edit3 className="h-4 w-4 mr-2" />
@@ -90,7 +113,29 @@ export function NoteEditor({ selectedNote }: NoteEditorProps) {
       </div>
 
       <div className="flex-1 overflow-hidden">
-        {isPreview ? (
+        {viewMode === "live" ? (
+          <div className="h-full flex">
+            <div className="w-1/2 border-r border-border">
+              <div className="h-full p-6">
+                <Textarea
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                  placeholder="Start writing your note..."
+                  className="w-full h-full resize-none border-none bg-transparent text-foreground placeholder:text-muted-foreground focus:ring-0 text-base leading-relaxed"
+                  disabled={!isEditing}
+                />
+              </div>
+            </div>
+            <div className="w-1/2">
+              <div className="h-full overflow-y-auto p-6">
+                <div
+                  className="prose prose-lg max-w-none text-foreground"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+                />
+              </div>
+            </div>
+          </div>
+        ) : viewMode === "preview" ? (
           <div className="h-full overflow-y-auto p-8">
             <div
               className="prose prose-lg max-w-none text-foreground"

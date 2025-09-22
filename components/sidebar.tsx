@@ -30,14 +30,27 @@ export function Sidebar({ collapsed, onToggle, selectedNote, onSelectNote }: Sid
       id: "1",
       title: "Welcome to Tau",
       content: "# Welcome to Tau\n\nThis is your first note. Start writing!",
-      createdAt: new Date(),
+      createdAt: new Date(Date.now() - 86400000), // 1 day ago
       folder: "Getting Started",
     },
     {
       id: "2",
       title: "Quick Notes",
       content: "# Quick Notes\n\nJot down your thoughts here.",
-      createdAt: new Date(),
+      createdAt: new Date(Date.now() - 3600000), // 1 hour ago
+    },
+    {
+      id: "3",
+      title: "Meeting Notes",
+      content: "# Meeting Notes\n\n## Action Items\n- Follow up on project timeline\n- Review budget proposal",
+      createdAt: new Date(Date.now() - 1800000), // 30 minutes ago
+      folder: "Work",
+    },
+    {
+      id: "4",
+      title: "Ideas",
+      content: "# Ideas\n\n- New app concept\n- Weekend project thoughts",
+      createdAt: new Date(), // Just now
     },
   ])
 
@@ -65,6 +78,8 @@ export function Sidebar({ collapsed, onToggle, selectedNote, onSelectNote }: Sid
       note.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       note.content.toLowerCase().includes(searchQuery.toLowerCase()),
   )
+
+  const recentNotes = [...notes].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 5)
 
   const groupedNotes = filteredNotes.reduce(
     (acc, note) => {
@@ -119,6 +134,44 @@ export function Sidebar({ collapsed, onToggle, selectedNote, onSelectNote }: Sid
       </div>
 
       <ScrollArea className="flex-1 p-2">
+        <div className="mb-6">
+          <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
+            <FileText className="h-4 w-4" />
+            Recent Notes
+          </div>
+          <div className="space-y-1 ml-2">
+            {recentNotes.map((note) => (
+              <div
+                key={`recent-${note.id}`}
+                onClick={() => onSelectNote(note.id)}
+                className={`group flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors ${
+                  selectedNote === note.id
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "hover:bg-sidebar-accent/50 text-sidebar-foreground"
+                }`}
+              >
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <FileText className="h-4 w-4 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <span className="truncate text-sm block">{note.title}</span>
+                    <span className="text-xs text-muted-foreground">{note.createdAt.toLocaleDateString()}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 hover:bg-sidebar-accent"
+                    onClick={(e) => deleteNote(note.id, e)}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {Object.entries(groupedNotes).map(([folder, folderNotes]) => (
           <div key={folder} className="mb-4">
             <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
