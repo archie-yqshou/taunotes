@@ -7,9 +7,13 @@ import { Suspense } from "react"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "Tau Notes",
-  description: "A clean, minimalist note-taking application inspired by Obsidian",
+  title: "Tau Notes - Clean, Minimalist Note-Taking",
+  description:
+    "A clean, minimalist note-taking application inspired by Obsidian. Write, organize, and customize your notes with ease.",
   generator: "v0.app",
+  keywords: ["notes", "note-taking", "markdown", "obsidian", "minimalist", "clean"],
+  authors: [{ name: "Tau Notes" }],
+  viewport: "width=device-width, initial-scale=1",
 }
 
 export default function RootLayout({
