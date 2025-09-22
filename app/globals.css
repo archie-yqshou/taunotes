@@ -4,76 +4,76 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  /* Updated color tokens for Tau notes app with Obsidian-like black and white theme */
+  /* Updated to Obsidian-inspired black and white theme */
   --background: oklch(1 0 0); /* White background for light mode */
   --foreground: oklch(0.145 0 0); /* Dark text */
-  --card: oklch(0.98 0 0); /* Slightly off-white for cards */
+  --card: oklch(0.98 0 0); /* Light card background */
   --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
+  --popover: oklch(0.98 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.145 0 0); /* Black for primary actions */
-  --primary-foreground: oklch(1 0 0); /* White text on black */
-  --secondary: oklch(0.95 0 0); /* Light gray */
+  --primary: oklch(0.145 0 0); /* Dark primary */
+  --primary-foreground: oklch(1 0 0); /* White text on dark */
+  --secondary: oklch(0.96 0 0); /* Light gray */
   --secondary-foreground: oklch(0.145 0 0);
-  --muted: oklch(0.95 0 0);
-  --muted-foreground: oklch(0.5 0 0); /* Medium gray for muted text */
-  --accent: oklch(0.9 0 0); /* Very light gray for accents */
+  --muted: oklch(0.94 0 0); /* Muted background */
+  --muted-foreground: oklch(0.45 0 0); /* Muted text */
+  --accent: oklch(0.92 0 0); /* Light accent */
   --accent-foreground: oklch(0.145 0 0);
-  --destructive: oklch(0.5 0.2 0); /* Red for destructive actions */
+  --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(1 0 0);
-  --border: oklch(0.9 0 0); /* Light gray borders */
-  --input: oklch(0.98 0 0);
-  --ring: oklch(0.3 0 0); /* Dark gray for focus rings */
-  --chart-1: oklch(0.3 0 0);
-  --chart-2: oklch(0.5 0 0);
-  --chart-3: oklch(0.7 0 0);
-  --chart-4: oklch(0.8 0 0);
-  --chart-5: oklch(0.9 0 0);
+  --border: oklch(0.88 0 0); /* Light border */
+  --input: oklch(0.98 0 0); /* Light input background */
+  --ring: oklch(0.45 0 0); /* Focus ring */
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
   --radius: 0.25rem; /* Smaller radius for cleaner look */
-  --sidebar: oklch(0.96 0 0); /* Very light gray sidebar */
+  --sidebar: oklch(0.96 0 0); /* Light sidebar */
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.145 0 0);
   --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.9 0 0);
+  --sidebar-accent: oklch(0.92 0 0);
   --sidebar-accent-foreground: oklch(0.145 0 0);
-  --sidebar-border: oklch(0.9 0 0);
-  --sidebar-ring: oklch(0.3 0 0);
+  --sidebar-border: oklch(0.88 0 0);
+  --sidebar-ring: oklch(0.45 0 0);
 }
 
 .dark {
-  /* Dark mode tokens for Obsidian-like dark theme */
+  /* Dark theme optimized for Obsidian-like experience */
   --background: oklch(0.08 0 0); /* Very dark background */
-  --foreground: oklch(0.9 0 0); /* Light text */
-  --card: oklch(0.12 0 0); /* Slightly lighter dark for cards */
-  --card-foreground: oklch(0.9 0 0);
-  --popover: oklch(0.08 0 0);
-  --popover-foreground: oklch(0.9 0 0);
-  --primary: oklch(0.9 0 0); /* Light for primary actions in dark mode */
+  --foreground: oklch(0.92 0 0); /* Light text */
+  --card: oklch(0.12 0 0); /* Dark card background */
+  --card-foreground: oklch(0.92 0 0);
+  --popover: oklch(0.12 0 0);
+  --popover-foreground: oklch(0.92 0 0);
+  --primary: oklch(0.92 0 0); /* Light primary in dark mode */
   --primary-foreground: oklch(0.08 0 0);
-  --secondary: oklch(0.15 0 0); /* Dark gray */
-  --secondary-foreground: oklch(0.9 0 0);
-  --muted: oklch(0.15 0 0);
-  --muted-foreground: oklch(0.6 0 0); /* Medium gray for muted text */
-  --accent: oklch(0.2 0 0); /* Darker accent */
-  --accent-foreground: oklch(0.9 0 0);
-  --destructive: oklch(0.5 0.2 0);
-  --destructive-foreground: oklch(0.9 0 0);
-  --border: oklch(0.2 0 0); /* Dark borders */
-  --input: oklch(0.12 0 0);
-  --ring: oklch(0.7 0 0); /* Light ring for dark mode */
-  --chart-1: oklch(0.7 0 0);
-  --chart-2: oklch(0.6 0 0);
-  --chart-3: oklch(0.5 0 0);
-  --chart-4: oklch(0.4 0 0);
-  --chart-5: oklch(0.3 0 0);
+  --secondary: oklch(0.16 0 0); /* Dark secondary */
+  --secondary-foreground: oklch(0.92 0 0);
+  --muted: oklch(0.16 0 0); /* Dark muted */
+  --muted-foreground: oklch(0.65 0 0); /* Muted text */
+  --accent: oklch(0.2 0 0); /* Dark accent */
+  --accent-foreground: oklch(0.92 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.92 0 0);
+  --border: oklch(0.2 0 0); /* Dark border */
+  --input: oklch(0.12 0 0); /* Dark input */
+  --ring: oklch(0.65 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
   --sidebar: oklch(0.1 0 0); /* Dark sidebar */
-  --sidebar-foreground: oklch(0.9 0 0);
-  --sidebar-primary: oklch(0.9 0 0);
+  --sidebar-foreground: oklch(0.92 0 0);
+  --sidebar-primary: oklch(0.92 0 0);
   --sidebar-primary-foreground: oklch(0.08 0 0);
   --sidebar-accent: oklch(0.2 0 0);
-  --sidebar-accent-foreground: oklch(0.9 0 0);
+  --sidebar-accent-foreground: oklch(0.92 0 0);
   --sidebar-border: oklch(0.2 0 0);
-  --sidebar-ring: oklch(0.7 0 0);
+  --sidebar-ring: oklch(0.65 0 0);
 }
 
 @theme inline {
@@ -123,35 +123,5 @@
   }
   body {
     @apply bg-background text-foreground;
-    /* Added font smoothing for better text rendering */
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
-
-  /* Added custom scrollbar styling for Obsidian-like feel */
-  ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    background: oklch(0.7 0 0);
-    border-radius: 4px;
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    background: oklch(0.6 0 0);
-  }
-
-  .dark ::-webkit-scrollbar-thumb {
-    background: oklch(0.3 0 0);
-  }
-
-  .dark ::-webkit-scrollbar-thumb:hover {
-    background: oklch(0.4 0 0);
   }
 }
