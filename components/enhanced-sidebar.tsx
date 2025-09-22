@@ -1,12 +1,13 @@
 "use client"
 
 import React, { useState, useEffect } from "react"
-import { DndContext, DragEndEvent, closestCenter, useSensor, useSensors, PointerSensor, useDraggable, useDroppable } from '@dnd-kit/core'
+import { DndContext, DragEndEvent, closestCenter, useSensor, useSensors, PointerSensor, useDraggable, useDroppable, pointerWithin, rectIntersection, type CollisionDetection } from '@dnd-kit/core'
+import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
 import { Search, Plus, FileText, FolderOpen, FolderClosed, Menu, X, Trash2, ChevronDown, ChevronRight, Settings, Clock } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { listEntries, createNote, createFolder, deleteEntry, renameEntry, type Entry } from "@/lib/tauri-api"
+import { listEntries, createNote, createFolder, deleteEntry, renameEntry, readNote, writeNote, type Entry } from "@/lib/tauri-api"
 import { cn } from "@/lib/utils"
 
 interface EnhancedSidebarProps {
@@ -45,11 +46,57 @@ export function EnhancedSidebar({
   const [recentNotes, setRecentNotes] = useState<Entry[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [expandedPaths, setExpandedPaths] = useState<string[]>([])
+  const [orderMap, setOrderMap] = useState<Record<string, string[]>>({})
+  const [dropIndicator, setDropIndicator] = useState<null | { targetId: string, position: 'before' | 'after' | 'inside' }>(null)
+
+  // Root droppables to allow moving items to vault root (entire sidebar + top/bottom spacers)
+  const { setNodeRef: setRootDropRef } = useDroppable({ id: '__ROOT__' })
+  const { setNodeRef: setRootTopRef } = useDroppable({ id: '__ROOT_TOP__' })
+  const { setNodeRef: setRootBottomRef } = useDroppable({ id: '__ROOT_BOTTOM__' })
+
+  const getParentPath = (p: string): string => {
+    const sep = p.includes('\\') ? '\\' : '/'
+    const idx = p.lastIndexOf(sep)
+    return idx === -1 ? '' : p.substring(0, idx)
+  }
+
+  const loadOrder = async (folderPath: string) => {
+    const orderFile = folderPath ? `${folderPath}${folderPath.includes('\\') ? '\\' : '/'}.tau_order.json` : `.tau_order.json`
+    try {
+      const content = await readNote(orderFile)
+      const names: string[] = JSON.parse(content)
+      setOrderMap(prev => ({ ...prev, [folderPath]: names }))
+      return names
+    } catch {
+      // ignore if not found
+      return [] as string[]
+    }
+  }
+
+  const saveOrder = async (folderPath: string, names: string[]) => {
+    const orderFile = folderPath ? `${folderPath}${folderPath.includes('\\') ? '\\' : '/'}.tau_order.json` : `.tau_order.json`
+    try {
+      await writeNote(orderFile, JSON.stringify(names))
+      setOrderMap(prev => ({ ...prev, [folderPath]: names }))
+    } catch (e) {
+      console.error('Failed to save order:', e)
+    }
+  }
 
   // dnd-kit sensors
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 3 } })
   )
+
+  // Prefer specific folder droppables; fall back to root only when no folder under pointer
+  const preferNonRootCollision: CollisionDetection = (args) => {
+    let collisions = pointerWithin(args)
+    if (!collisions.length) collisions = rectIntersection(args)
+    if (!collisions.length) collisions = closestCenter(args)
+    const nonRoot = collisions.filter(c => c.id !== '__ROOT__')
+    return nonRoot.length ? nonRoot : collisions
+  }
 
   // Load entries from vault
   useEffect(() => {
@@ -102,7 +149,7 @@ export function EnhancedSidebar({
       const node: FileTreeNode = {
         entry,
         children: [],
-        isExpanded: false
+        isExpanded: expandedPaths.includes(entry.path)
       }
       nodeMap.set(entry.path, node)
     })
@@ -127,6 +174,18 @@ export function EnhancedSidebar({
 
     sortNodes(tree)
     setFileTree(tree)
+
+    // Re-expand previously expanded folders by lazy-loading their children
+    if (expandedPaths.length > 0) {
+      const depth = (p: string) => (p.match(/[\\\/]/g) || []).length
+      const sorted = [...expandedPaths].sort((a, b) => depth(a) - depth(b))
+      sorted.forEach(p => {
+        // Only load children for nodes that exist
+        if (entries.find(e => e.path === p && e.is_dir)) {
+          loadChildrenForFolder(p)
+        }
+      })
+    }
   }
 
   // Find a node by path
@@ -156,9 +215,14 @@ export function EnhancedSidebar({
   const loadChildrenForFolder = async (folderPath: string) => {
     try {
       const children = await listEntries(folderPath)
-      const childNodes: FileTreeNode[] = children.map(entry => ({ entry, children: [], isExpanded: false }))
-      // Sort children: folders first, then files
+      const childNodes: FileTreeNode[] = children.map(entry => ({ entry, children: [], isExpanded: expandedPaths.includes(entry.path) }))
+      // Sort children: apply saved order first, then folders first, then alpha
+      const saved = orderMap[folderPath] || await loadOrder(folderPath)
+      const nameToIndex = new Map(saved.map((n, i) => [n, i]))
       childNodes.sort((a, b) => {
+        const ai = nameToIndex.has(a.entry.name) ? (nameToIndex.get(a.entry.name) as number) : Number.MAX_SAFE_INTEGER
+        const bi = nameToIndex.has(b.entry.name) ? (nameToIndex.get(b.entry.name) as number) : Number.MAX_SAFE_INTEGER
+        if (ai !== bi) return ai - bi
         if (a.entry.is_dir && !b.entry.is_dir) return -1
         if (!a.entry.is_dir && b.entry.is_dir) return 1
         return a.entry.name.localeCompare(b.entry.name)
@@ -224,6 +288,17 @@ export function EnhancedSidebar({
     const hasChildrenLoaded = (currentNode?.children?.length || 0) > 0
 
     setFileTree(prev => prev.map(node => updateNodeExpansion(node, path)))
+
+    // Track expanded paths to preserve after reloads
+    setExpandedPaths(prev => {
+      const set = new Set(prev)
+      if (isCurrentlyExpanded) {
+        set.delete(path)
+      } else {
+        set.add(path)
+      }
+      return Array.from(set)
+    })
 
     // If we are expanding and children are not loaded, lazy-load them
     if (!isCurrentlyExpanded && !hasChildrenLoaded) {
@@ -368,23 +443,21 @@ export function EnhancedSidebar({
   const TreeNode: React.FC<{ node: FileTreeNode, depth: number }> = ({ node, depth }) => {
     const isSelected = selectedNote === node.entry.path
     const isMarkdownFile = !node.entry.is_dir && node.entry.name.endsWith('.md')
-    // Folder as droppable
-    const { setNodeRef: setDropRef, isOver } = useDroppable({ id: node.entry.path })
-    // File as draggable
-    const { attributes, listeners, setNodeRef: setDragRef, isDragging: isFileDragging } = useDraggable({ id: node.entry.path })
+    // Make every node draggable AND droppable (needed for before/after indicators)
+    const { attributes, listeners, setNodeRef: setDragRef } = useDraggable({ id: node.entry.path })
+    const { setNodeRef: setDropRef, isOver } = useDroppable({ id: node.entry.path, disabled: false })
 
-    const containerProps: React.HTMLAttributes<HTMLDivElement> & { ref?: any } = {}
-    if (node.entry.is_dir) {
-      containerProps.ref = setDropRef
-    } else if (isMarkdownFile) {
-      containerProps.ref = setDragRef
-      Object.assign(containerProps, attributes, listeners)
+    const setRefs = (el: HTMLElement | null) => {
+      setDragRef(el)
+      if (node.entry.is_dir) setDropRef(el)
     }
 
     return (
       <div key={node.entry.path} style={{ marginLeft: `${depth * 12}px` }}>
         <div
-          {...containerProps}
+          ref={setRefs}
+          {...attributes}
+          {...listeners}
           onClick={(e) => {
             if (isDragging) {
               e.preventDefault()
@@ -397,14 +470,29 @@ export function EnhancedSidebar({
             }
           }}
           className={cn(
-            "group flex items-center justify-between p-2 rounded-md transition-colors select-none",
-            (isMarkdownFile ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"),
+            "group relative flex items-center justify-between p-2 rounded-md transition-colors select-none",
+            "cursor-grab active:cursor-grabbing",
             isSelected
               ? "bg-sidebar-accent text-sidebar-accent-foreground"
               : "hover:bg-sidebar-accent/50 text-sidebar-foreground",
-            isOver && node.entry.is_dir && "bg-blue-200 dark:bg-blue-800/50 border-2 border-dashed border-blue-400"
+            dropIndicator && dropIndicator.targetId === node.entry.path && dropIndicator.position === 'inside' && node.entry.is_dir && "bg-blue-200 dark:bg-blue-800/50 border-2 border-dashed border-blue-400"
           )}
         >
+          {/* Drop indicator line for before/after positions */}
+          {dropIndicator && dropIndicator.targetId === node.entry.path && dropIndicator.position !== 'inside' && (
+            <div
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                height: 2,
+                background: 'var(--foreground)',
+                opacity: 0.3,
+                top: dropIndicator.position === 'before' ? 0 : undefined,
+                bottom: dropIndicator.position === 'after' ? 0 : undefined,
+              }}
+            />
+          )}
           <div className="flex items-center gap-1 flex-1 min-w-0">
             {node.entry.is_dir ? (
               <>
@@ -444,20 +532,25 @@ export function EnhancedSidebar({
         </div>
 
         {node.entry.is_dir && node.isExpanded && (
-          <div>
-            {node.children.length > 0 ? (
-              node.children.map(child => (
-                <TreeNode key={child.entry.path} node={child} depth={depth + 1} />
-              ))
-            ) : (
-              <div 
-                style={{ marginLeft: `${(depth + 1) * 12}px` }}
-                className="p-2 text-xs text-muted-foreground italic"
-              >
-                Empty folder
-              </div>
-            )}
-          </div>
+          <SortableContext
+            items={node.children.map(c => c.entry.path)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div>
+              {node.children.length > 0 ? (
+                node.children.map(child => (
+                  <TreeNode key={child.entry.path} node={child} depth={depth + 1} />
+                ))
+              ) : (
+                <div 
+                  style={{ marginLeft: `${(depth + 1) * 12}px` }}
+                  className="p-2 text-xs text-muted-foreground italic"
+                >
+                  Empty folder
+                </div>
+              )}
+            </div>
+          </SortableContext>
         )}
       </div>
     )
@@ -487,26 +580,97 @@ export function EnhancedSidebar({
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={preferNonRootCollision}
       onDragStart={(e) => {
         const id = (e.active?.id as string) || null
         setActiveId(id)
         setIsDragging(true)
+      }}
+      onDragOver={(e) => {
+        if (!e.over) { setDropIndicator(null); return }
+        const overId = e.over.id as string | undefined
+        if (!overId) { setDropIndicator(null); return }
+        if (overId === '__ROOT__' || overId === '__ROOT_TOP__') { setDropIndicator({ targetId: '__ROOT__', position: 'before' }); return }
+        if (overId === '__ROOT_BOTTOM__') { setDropIndicator({ targetId: '__ROOT__', position: 'after' }); return }
+        const overNode = findNodeByPath(fileTree, overId)
+        if (!overNode) { setDropIndicator(null); return }
+        const overRect = e.over.rect
+        const activeRect = e.active.rect.current.translated || e.active.rect.current.initial
+        const activeCenterY = (activeRect?.top || 0) + (activeRect?.height || 0) / 2
+        const top = overRect.top
+        const bottom = overRect.bottom
+        const height = overRect.height
+        if (overNode.entry.is_dir) {
+          // Only show before/after when near edges; default to inside when centered
+          const edge = Math.max(8, height * 0.15)
+          const beforeThreshold = top + edge
+          const afterThreshold = bottom - edge
+          if (activeCenterY < beforeThreshold) {
+            setDropIndicator({ targetId: overId, position: 'before' })
+          } else if (activeCenterY > afterThreshold) {
+            setDropIndicator({ targetId: overId, position: 'after' })
+          } else {
+            setDropIndicator({ targetId: overId, position: 'inside' })
+          }
+        } else {
+          const mid = top + height / 2
+          setDropIndicator({ targetId: overId, position: activeCenterY < mid ? 'before' : 'after' })
+        }
       }}
       onDragEnd={async (e: DragEndEvent) => {
         setIsDragging(false)
         const sourcePath = e.active?.id as string
         const overId = e.over?.id as string | undefined
         setActiveId(null)
-        if (!sourcePath || !overId) return
-        // Only allow dropping onto folders
-        const targetNode = fileTree && findNodeByPath(fileTree, overId)
-        if (!targetNode || !targetNode.entry.is_dir) return
+        if (!sourcePath || !overId) { setDropIndicator(null); return }
+
+        // Intra-folder reordering (same parent)
+        const sourceParent = getParentPath(sourcePath)
+        let overParent = ''
+        if (overId === '__ROOT__' || overId === '__ROOT_TOP__' || overId === '__ROOT_BOTTOM__') {
+          overParent = ''
+        } else {
+          const overNode = findNodeByPath(fileTree, overId)
+          overParent = overNode?.entry.is_dir && dropIndicator?.position === 'inside' ? overId : getParentPath(overId)
+        }
+        // Prevent moving folder into its own descendant
+        if (overParent && (overParent === sourcePath || overParent.startsWith(sourcePath + (sourcePath.includes('\\') ? '\\' : '/')))) {
+          setDropIndicator(null)
+          return
+        }
+
+        if (overParent === sourceParent && (overId !== '__ROOT__' && overId !== '__ROOT_TOP__' && overId !== '__ROOT_BOTTOM__') && dropIndicator && dropIndicator.position !== 'inside') {
+          const containerNodes = (overParent ? findNodeByPath(fileTree, overParent)?.children : fileTree) || []
+          const order = containerNodes.map(n => n.entry.name)
+          const sourceName = sourcePath.split(/[\\/]/).pop()!
+          const targetName = (findNodeByPath(fileTree, overId)?.entry.name) || ''
+          const from = order.indexOf(sourceName)
+          const toBase = order.indexOf(targetName)
+          if (from !== -1 && toBase !== -1) {
+            const to = dropIndicator.position === 'before' ? toBase : toBase + 1
+            const newOrder = arrayMove(order, from, to > from ? to - 1 : to)
+            await saveOrder(overParent, newOrder)
+            await loadEntries()
+            setDropIndicator(null)
+            return
+          }
+        }
+        // Allow dropping onto folders or root
+        if (overId !== '__ROOT__') {
+          const targetNode = fileTree && findNodeByPath(fileTree, overId)
+          if (!targetNode || !targetNode.entry.is_dir) return
+          // Prevent moving a folder into its own descendant
+          const sep = overId.includes('\\') ? '\\' : '/'
+          if (sourcePath === overId || overId.startsWith(sourcePath + sep)) {
+            return
+          }
+        }
         try {
           const fileName = sourcePath.split(/[\\/]/).pop()!
-          const sep = overId.includes('\\') ? '\\' : '/'
-          const newPath = overId + sep + fileName
+          const newParent = overParent // resolved above (root, folder for inside, or parent of target for before/after)
+          const newPath = newParent ? (newParent + (newParent.includes('\\') ? '\\' : '/') + fileName) : fileName
           await renameEntry(sourcePath, newPath)
+          // Reload but keep expanded folders
           await loadEntries()
           if (selectedNote === sourcePath) {
             onSelectNote(newPath)
@@ -516,6 +680,7 @@ export function EnhancedSidebar({
           console.error('Failed to move via dnd-kit:', error)
           alert(`Failed to move file: ${error}`)
         }
+        setDropIndicator(null)
       }}
       onDragCancel={() => {
         setIsDragging(false)
@@ -538,6 +703,7 @@ export function EnhancedSidebar({
           try { (e as unknown as DragEvent).dataTransfer!.dropEffect = 'move' } catch {}
         }
       }}
+      ref={setRootDropRef}
     >
       <div className="p-4 border-b border-sidebar-border">
         <div className="flex items-center justify-between mb-4">
@@ -699,11 +865,20 @@ export function EnhancedSidebar({
                   </div>
                 ) : (
                   // Show tree structure when not searching
-                  <div>
-                    {fileTree.map(node => (
-                      <TreeNode key={node.entry.path} node={node} depth={0} />
-                    ))}
-                  </div>
+                  <SortableContext
+                    items={["__ROOT_TOP__", ...fileTree.map(n => n.entry.path), "__ROOT_BOTTOM__"]}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    <div>
+                      {/* Top spacer droppable for moving to root above first item */}
+                      <div ref={setRootTopRef} className="h-3" />
+                      {fileTree.map(node => (
+                        <TreeNode key={node.entry.path} node={node} depth={0} />
+                      ))}
+                      {/* Bottom spacer droppable for moving to root below last item */}
+                      <div ref={setRootBottomRef} className="h-6" />
+                    </div>
+                  </SortableContext>
                 )}
               </div>
             </div>
