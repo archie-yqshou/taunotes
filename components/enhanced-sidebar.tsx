@@ -253,11 +253,6 @@ export function EnhancedSidebar({
 
   const handleDragStart = (e: React.DragEvent, filePath: string) => {
     e.stopPropagation()
-    // Prevent double triggers by checking if drag is already in progress
-    if (draggedItem) {
-      console.log("[v0] Drag already in progress, ignoring")
-      return
-    }
     console.log("[v0] Drag start:", filePath)
     e.dataTransfer.effectAllowed = "move"
     e.dataTransfer.setData("text/plain", filePath)
@@ -275,7 +270,7 @@ export function EnhancedSidebar({
 
   const handleDragEnd = (e: React.DragEvent) => {
     e.stopPropagation()
-    console.log("[v0] Drag end")
+    console.log("[v0] Drag end - resetting state")
     setDraggedItem(null)
     setDragOverTarget(null)
     setInsertionLine(null)
@@ -314,11 +309,15 @@ export function EnhancedSidebar({
 
     const droppedPath = e.dataTransfer.getData("text/plain")
 
-    if (!droppedPath || droppedPath === targetPath) {
-      console.log("[v0] Invalid drop - same path or no dragged item")
-      setDraggedItem(null)
-      setDragOverTarget(null)
-      setInsertionLine(null)
+    if (!draggedItem || !droppedPath) {
+      console.log("[v0] Invalid drop - no dragged item")
+      handleDragEnd(e) // Reset state
+      return
+    }
+
+    if (droppedPath === targetPath) {
+      console.log("[v0] Invalid drop - same path")
+      handleDragEnd(e) // Reset state
       return
     }
 
@@ -327,7 +326,6 @@ export function EnhancedSidebar({
       let newPath: string
 
       if (position && targetPath) {
-        // For now, just move to same directory as target
         const targetParent = getParentPath(targetPath)
         const separator = targetPath.includes("\\") ? "\\" : "/"
         newPath = targetParent ? targetParent + separator + fileName : fileName
@@ -336,7 +334,11 @@ export function EnhancedSidebar({
         newPath = fileName
       } else {
         const targetEntry = entries.find((e) => e.path === targetPath)
-        if (!targetEntry?.is_dir) return
+        if (!targetEntry?.is_dir) {
+          console.log("[v0] Invalid drop - target is not a directory")
+          handleDragEnd(e) // Reset state
+          return
+        }
 
         const separator = targetPath.includes("\\") ? "\\" : "/"
         newPath = targetPath + separator + fileName
@@ -354,9 +356,7 @@ export function EnhancedSidebar({
       console.error("Failed to move file:", error)
       alert(`Failed to move file: ${error}`)
     } finally {
-      setDraggedItem(null)
-      setDragOverTarget(null)
-      setInsertionLine(null)
+      handleDragEnd(e)
     }
   }
 
@@ -368,7 +368,6 @@ export function EnhancedSidebar({
     const isSelected = selectedNote === node.entry.path
     const isMarkdownFile = !node.entry.is_dir && node.entry.name.endsWith(".md")
     const isDraggedOver = dragOverTarget === node.entry.path
-    const isBeingDragged = draggedItem === node.entry.path
     const showInsertionBefore = insertionLine?.position === "before" && insertionLine.path === node.entry.path
     const showInsertionAfter = insertionLine?.position === "after" && insertionLine.path === node.entry.path
 
@@ -377,7 +376,7 @@ export function EnhancedSidebar({
         {showInsertionBefore && <div className="h-0.5 bg-blue-400 rounded-full mx-2 mb-1" />}
 
         <div
-          draggable={!isBeingDragged} // Prevent dragging if already being dragged
+          draggable={true}
           onDragStart={(e) => handleDragStart(e, node.entry.path)}
           onDragEnd={handleDragEnd}
           onDragOver={(e) => {
@@ -413,7 +412,6 @@ export function EnhancedSidebar({
             "group relative flex items-center justify-between p-2 rounded-md transition-all duration-200 select-none cursor-pointer",
             isSelected && "bg-sidebar-accent text-sidebar-accent-foreground",
             !isSelected && "hover:bg-sidebar-accent/50 text-sidebar-foreground",
-            isBeingDragged && "opacity-50 scale-95",
             isDraggedOver && node.entry.is_dir && "bg-blue-100 dark:bg-blue-900/30 ring-2 ring-blue-400 ring-inset",
           )}
         >
