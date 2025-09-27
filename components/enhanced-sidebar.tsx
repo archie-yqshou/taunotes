@@ -55,6 +55,7 @@ export function EnhancedSidebar({
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([])
   const [draggedItem, setDraggedItem] = useState<string | null>(null)
   const [dragOverTarget, setDragOverTarget] = useState<string | null>(null)
+  const [insertionLine, setInsertionLine] = useState<{ position: "before" | "after"; path: string } | null>(null)
   const [recentNotes, setRecentNotes] = useState<Entry[]>([])
   const [expandedPaths, setExpandedPaths] = useState<string[]>([])
 
@@ -252,6 +253,11 @@ export function EnhancedSidebar({
 
   const handleDragStart = (e: React.DragEvent, filePath: string) => {
     e.stopPropagation()
+    // Prevent double triggers by checking if drag is already in progress
+    if (draggedItem) {
+      console.log("[v0] Drag already in progress, ignoring")
+      return
+    }
     console.log("[v0] Drag start:", filePath)
     e.dataTransfer.effectAllowed = "move"
     e.dataTransfer.setData("text/plain", filePath)
@@ -272,18 +278,24 @@ export function EnhancedSidebar({
     console.log("[v0] Drag end")
     setDraggedItem(null)
     setDragOverTarget(null)
+    setInsertionLine(null)
   }
 
-  const handleDragOver = (e: React.DragEvent, targetPath?: string, isReorderZone?: boolean) => {
+  const handleDragOver = (e: React.DragEvent, targetPath?: string, position?: "before" | "after") => {
     if (!draggedItem) return
     e.preventDefault()
     e.stopPropagation()
     e.dataTransfer.dropEffect = "move"
 
-    if (isReorderZone) {
-      setDragOverTarget(`__REORDER__${targetPath}`)
+    if (position && targetPath) {
+      setInsertionLine({ position, path: targetPath })
+      setDragOverTarget(null)
+    } else if (targetPath) {
+      setDragOverTarget(targetPath)
+      setInsertionLine(null)
     } else {
-      setDragOverTarget(targetPath || "__ROOT__")
+      setDragOverTarget("__ROOT__")
+      setInsertionLine(null)
     }
   }
 
@@ -291,18 +303,14 @@ export function EnhancedSidebar({
     e.stopPropagation()
     if (!e.currentTarget.contains(e.relatedTarget as Node)) {
       setDragOverTarget(null)
+      setInsertionLine(null)
     }
   }
 
-  const handleDrop = async (
-    e: React.DragEvent,
-    targetPath?: string,
-    isReorderZone?: boolean,
-    insertBefore?: string,
-  ) => {
+  const handleDrop = async (e: React.DragEvent, targetPath?: string, position?: "before" | "after") => {
     e.preventDefault()
     e.stopPropagation()
-    console.log("[v0] Drop event triggered for:", targetPath || "root", isReorderZone ? "(reorder)" : "")
+    console.log("[v0] Drop event triggered for:", targetPath || "root", position ? `(${position})` : "")
 
     const droppedPath = e.dataTransfer.getData("text/plain")
 
@@ -310,6 +318,7 @@ export function EnhancedSidebar({
       console.log("[v0] Invalid drop - same path or no dragged item")
       setDraggedItem(null)
       setDragOverTarget(null)
+      setInsertionLine(null)
       return
     }
 
@@ -317,24 +326,13 @@ export function EnhancedSidebar({
       const fileName = droppedPath.split(/[\\/]/).pop()!
       let newPath: string
 
-      if (isReorderZone && insertBefore) {
-        const draggedEntry = entries.find((e) => e.path === droppedPath)
-        const targetEntry = entries.find((e) => e.path === insertBefore)
-
-        if (draggedEntry && targetEntry) {
-          const draggedParent = getParentPath(droppedPath)
-          const targetParent = getParentPath(insertBefore)
-
-          if (draggedParent === targetParent) {
-            console.log("[v0] Reordering within same directory")
-            setDraggedItem(null)
-            setDragOverTarget(null)
-            return
-          }
-        }
-      }
-
-      if (!targetPath || targetPath === "__ROOT__") {
+      if (position && targetPath) {
+        // For now, just move to same directory as target
+        const targetParent = getParentPath(targetPath)
+        const separator = targetPath.includes("\\") ? "\\" : "/"
+        newPath = targetParent ? targetParent + separator + fileName : fileName
+        console.log("[v0] Reordering to same directory as:", targetPath)
+      } else if (!targetPath || targetPath === "__ROOT__") {
         newPath = fileName
       } else {
         const targetEntry = entries.find((e) => e.path === targetPath)
@@ -358,6 +356,7 @@ export function EnhancedSidebar({
     } finally {
       setDraggedItem(null)
       setDragOverTarget(null)
+      setInsertionLine(null)
     }
   }
 
@@ -370,23 +369,38 @@ export function EnhancedSidebar({
     const isMarkdownFile = !node.entry.is_dir && node.entry.name.endsWith(".md")
     const isDraggedOver = dragOverTarget === node.entry.path
     const isBeingDragged = draggedItem === node.entry.path
-    const isReorderTarget = dragOverTarget?.startsWith(`__REORDER__${node.entry.path}`)
+    const showInsertionBefore = insertionLine?.position === "before" && insertionLine.path === node.entry.path
+    const showInsertionAfter = insertionLine?.position === "after" && insertionLine.path === node.entry.path
 
     return (
       <div key={node.entry.path} style={{ marginLeft: `${depth * 12}px` }}>
-        <div
-          className={cn("h-1 transition-all duration-200", isReorderTarget && "bg-blue-400 h-2 rounded-full")}
-          onDragOver={(e) => handleDragOver(e, node.entry.path, true)}
-          onDrop={(e) => handleDrop(e, undefined, true, node.entry.path)}
-        />
+        {showInsertionBefore && <div className="h-0.5 bg-blue-400 rounded-full mx-2 mb-1" />}
 
         <div
-          draggable
+          draggable={!isBeingDragged} // Prevent dragging if already being dragged
           onDragStart={(e) => handleDragStart(e, node.entry.path)}
           onDragEnd={handleDragEnd}
-          onDragOver={(e) => handleDragOver(e, node.entry.is_dir ? node.entry.path : undefined)}
+          onDragOver={(e) => {
+            if (node.entry.is_dir) {
+              handleDragOver(e, node.entry.path)
+            } else {
+              const rect = e.currentTarget.getBoundingClientRect()
+              const midpoint = rect.top + rect.height / 2
+              const position = e.clientY < midpoint ? "before" : "after"
+              handleDragOver(e, node.entry.path, position)
+            }
+          }}
           onDragLeave={handleDragLeave}
-          onDrop={(e) => handleDrop(e, node.entry.is_dir ? node.entry.path : undefined)}
+          onDrop={(e) => {
+            if (node.entry.is_dir) {
+              handleDrop(e, node.entry.path)
+            } else {
+              const rect = e.currentTarget.getBoundingClientRect()
+              const midpoint = rect.top + rect.height / 2
+              const position = e.clientY < midpoint ? "before" : "after"
+              handleDrop(e, node.entry.path, position)
+            }
+          }}
           onClick={(e) => {
             e.stopPropagation()
             if (node.entry.is_dir) {
@@ -442,6 +456,8 @@ export function EnhancedSidebar({
             </Button>
           </div>
         </div>
+
+        {showInsertionAfter && <div className="h-0.5 bg-blue-400 rounded-full mx-2 mt-1" />}
 
         {node.entry.is_dir && node.isExpanded && (
           <div>
