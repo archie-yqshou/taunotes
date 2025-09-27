@@ -18,7 +18,8 @@ pub fn run() {
         fs::write_note,
         fs::rename_entry,
         fs::delete_entry,
-        fs::reveal_in_os
+        fs::reveal_in_os,
+        fs::reorder_entries
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

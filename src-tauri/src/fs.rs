@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::collections::HashMap;
 use tauri::Manager;
 
 #[derive(Default)]
@@ -14,6 +15,11 @@ pub struct Entry {
     pub path: String,
     pub is_dir: bool,
     pub modified: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileOrder {
+    pub order: Vec<String>,
 }
 
 #[tauri::command]
@@ -36,6 +42,37 @@ pub async fn get_vault(app_handle: tauri::AppHandle) -> Result<Option<String>, S
     let state_guard = state.lock().map_err(|e| e.to_string())?;
     
     Ok(state_guard.vault_path.as_ref().map(|p| p.to_string_lossy().to_string()))
+}
+
+fn get_order_file_path(dir_path: &PathBuf) -> PathBuf {
+    dir_path.join(".tau_order.json")
+}
+
+fn read_file_order(dir_path: &PathBuf) -> HashMap<String, usize> {
+    let order_file = get_order_file_path(dir_path);
+    let mut order_map = HashMap::new();
+
+    if let Ok(content) = fs::read_to_string(&order_file) {
+        if let Ok(file_order) = serde_json::from_str::<FileOrder>(&content) {
+            for (index, file_name) in file_order.order.iter().enumerate() {
+                order_map.insert(file_name.clone(), index);
+            }
+        }
+    }
+
+    order_map
+}
+
+fn write_file_order(dir_path: &PathBuf, order: Vec<String>) -> Result<(), String> {
+    let order_file = get_order_file_path(dir_path);
+    let file_order = FileOrder { order };
+    let content = serde_json::to_string_pretty(&file_order)
+        .map_err(|e| format!("Failed to serialize order: {}", e))?;
+
+    fs::write(&order_file, content)
+        .map_err(|e| format!("Failed to write order file: {}", e))?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -96,15 +133,29 @@ pub async fn list_entries(app_handle: tauri::AppHandle, path: Option<String>) ->
         });
     }
     
-    // Sort entries: directories first, then files, alphabetically
+    // Read custom order if it exists
+    let order_map = read_file_order(&target_path);
+
+    // Sort entries: directories first, then files, using custom order if available
     entries.sort_by(|a, b| {
         match (a.is_dir, b.is_dir) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            _ => {
+                // Both are same type (dir or file), check custom order
+                let a_order = order_map.get(&a.name);
+                let b_order = order_map.get(&b.name);
+
+                match (a_order, b_order) {
+                    (Some(a_idx), Some(b_idx)) => a_idx.cmp(b_idx),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                }
+            }
         }
     });
-    
+
     Ok(entries)
 }
 
@@ -290,6 +341,88 @@ pub async fn reveal_in_os(app_handle: tauri::AppHandle, rel: String) -> Result<(
             .spawn()
             .map_err(|e| format!("Failed to reveal in OS: {}", e))?;
     }
-    
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn reorder_entries(app_handle: tauri::AppHandle, dir_path: Option<String>, source: String, target: String, position: String) -> Result<(), String> {
+    let state = app_handle.state::<std::sync::Mutex<AppState>>();
+    let state_guard = state.lock().map_err(|e| e.to_string())?;
+
+    let base_path = match &state_guard.vault_path {
+        Some(vault_path) => vault_path,
+        None => return Err("No vault set".to_string()),
+    };
+
+    let target_dir = if let Some(rel_path) = dir_path {
+        base_path.join(rel_path)
+    } else {
+        base_path.clone()
+    };
+
+    if !target_dir.exists() {
+        return Err(format!("Directory '{}' does not exist", target_dir.display()));
+    }
+
+    // Read current entries to get all file names
+    let dir_entries = fs::read_dir(&target_dir)
+        .map_err(|e| format!("Failed to read directory: {}", e))?;
+
+    let mut file_names = Vec::new();
+    for entry in dir_entries {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Skip .tau_order.json files
+        if !name.ends_with(".tau_order.json") {
+            file_names.push(name);
+        }
+    }
+
+    // Sort by current order if it exists
+    let current_order = read_file_order(&target_dir);
+    file_names.sort_by(|a, b| {
+        let a_order = current_order.get(a);
+        let b_order = current_order.get(b);
+
+        match (a_order, b_order) {
+            (Some(a_idx), Some(b_idx)) => a_idx.cmp(b_idx),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.to_lowercase().cmp(&b.to_lowercase()),
+        }
+    });
+
+    // Extract just the filename from source path
+    let source_name = source.split(['/', '\\']).last().unwrap_or(&source).to_string();
+    let target_name = target.split(['/', '\\']).last().unwrap_or(&target).to_string();
+
+    // Find source and target indices
+    let source_idx = file_names.iter().position(|name| name == &source_name);
+    let target_idx = file_names.iter().position(|name| name == &target_name);
+
+    match (source_idx, target_idx) {
+        (Some(src_idx), Some(tgt_idx)) => {
+            // Remove source from its current position
+            let source_item = file_names.remove(src_idx);
+
+            // Insert at new position
+            let insert_idx = if position == "before" {
+                if src_idx < tgt_idx { tgt_idx - 1 } else { tgt_idx }
+            } else {
+                if src_idx < tgt_idx { tgt_idx } else { tgt_idx + 1 }
+            };
+
+            file_names.insert(insert_idx, source_item);
+
+            // Write the new order
+            write_file_order(&target_dir, file_names)?;
+        }
+        _ => {
+            return Err(format!("Could not find source '{}' or target '{}' in directory", source_name, target_name));
+        }
+    }
+
     Ok(())
 }

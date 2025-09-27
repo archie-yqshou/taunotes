@@ -1,6 +1,7 @@
 "use client"
 
 import type React from "react"
+
 import { useState, useEffect } from "react"
 import {
   Search,
@@ -19,7 +20,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { listEntries, createNote, createFolder, deleteEntry, renameEntry, type Entry } from "@/lib/tauri-api"
+import { listEntries, createNote, createFolder, deleteEntry, renameEntry, reorderEntries, type Entry } from "@/lib/tauri-api"
 import { cn } from "@/lib/utils"
 
 interface EnhancedSidebarProps {
@@ -55,7 +56,8 @@ export function EnhancedSidebar({
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([])
   const [draggedItem, setDraggedItem] = useState<string | null>(null)
   const [dragOverTarget, setDragOverTarget] = useState<string | null>(null)
-  const [insertionLine, setInsertionLine] = useState<{ position: "before" | "after"; path: string } | null>(null)
+  const [insertionLine, setInsertionLine] = useState<{ position: "before" | "after"; path: string; depth?: number } | null>(null)
+  const [animatedSpacing, setAnimatedSpacing] = useState<{ position: "before" | "after"; path: string; depth?: number } | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [dragStartPos, setDragStartPos] = useState<{ x: number; y: number } | null>(null)
   const [dragStartTime, setDragStartTime] = useState<number | null>(null)
@@ -75,6 +77,17 @@ export function EnhancedSidebar({
       const vaultEntries = await listEntries()
       setEntries(vaultEntries)
       buildFileTree(vaultEntries)
+
+      // Refresh expanded folders to update their contents
+      if (expandedPaths.length > 0) {
+        const depth = (p: string) => (p.match(/[\\/]/g) || []).length
+        const sorted = [...expandedPaths].sort((a, b) => depth(a) - depth(b))
+        sorted.forEach((p) => {
+          if (vaultEntries.find((e) => e.path === p && e.is_dir)) {
+            loadChildrenForFolder(p)
+          }
+        })
+      }
     } catch (error) {
       console.error("Failed to load entries:", error)
     } finally {
@@ -86,8 +99,10 @@ export function EnhancedSidebar({
     const tree: FileTreeNode[] = []
     const nodeMap = new Map<string, FileTreeNode>()
 
-    // Create nodes for all entries
-    entries.forEach((entry) => {
+    // Filter out .tau_order.json files and create nodes for all other entries
+    const filteredEntries = entries.filter(entry => !entry.name.endsWith('.tau_order.json'))
+
+    filteredEntries.forEach((entry) => {
       const node: FileTreeNode = {
         entry,
         children: [],
@@ -97,7 +112,7 @@ export function EnhancedSidebar({
     })
 
     // Build tree structure - only for root level items initially
-    entries.forEach((entry) => {
+    filteredEntries.forEach((entry) => {
       const node = nodeMap.get(entry.path)!
       if (!entry.path.includes("/") && !entry.path.includes("\\")) {
         tree.push(node)
@@ -159,10 +174,8 @@ export function EnhancedSidebar({
 
   // Lazy-load folder contents when expanding
   const loadChildrenForFolder = async (folderPath: string) => {
-    console.log("[v0] Loading children for folder:", folderPath)
     try {
       const children = await listEntries(folderPath)
-      console.log("[v0] Loaded children:", children.map(c => c.path))
       const childNodes: FileTreeNode[] = children.map((entry) => ({
         entry,
         children: [],
@@ -175,7 +188,7 @@ export function EnhancedSidebar({
   }
 
   const updateRecentNotes = () => {
-    const markdownFiles = entries.filter((entry) => !entry.is_dir && entry.name.endsWith(".md"))
+    const markdownFiles = entries.filter((entry) => !entry.is_dir && entry.name.endsWith(".md") && !entry.name.endsWith('.tau_order.json'))
     // Sort by modified date (most recent first)
     const sorted = markdownFiles.sort((a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime())
     setRecentNotes(sorted.slice(0, 5))
@@ -223,17 +236,10 @@ export function EnhancedSidebar({
   }
 
   const toggleFolder = (path: string) => {
-    console.log("[v0] toggleFolder called for:", path)
     // Determine current state before toggling
     const currentNode = findNodeByPath(fileTree, path)
     const isCurrentlyExpanded = currentNode?.isExpanded
     const hasChildrenLoaded = (currentNode?.children?.length || 0) > 0
-    
-    console.log("[v0] Current state:", { 
-      isCurrentlyExpanded, 
-      hasChildrenLoaded, 
-      childrenCount: currentNode?.children?.length 
-    })
 
     setFileTree((prev) => prev.map((node) => updateNodeExpansion(node, path)))
 
@@ -256,7 +262,6 @@ export function EnhancedSidebar({
 
   const updateNodeExpansion = (node: FileTreeNode, targetPath: string): FileTreeNode => {
     if (node.entry.path === targetPath) {
-      console.log("[v0] Updating expansion for:", targetPath, "from", node.isExpanded, "to", !node.isExpanded)
       return { ...node, isExpanded: !node.isExpanded }
     }
     return {
@@ -269,7 +274,6 @@ export function EnhancedSidebar({
     // Only start drag on left mouse button
     if (e.button !== 0) return
     
-    console.log("[v0] Mouse down on:", filePath)
     
     // Record the start position and time for potential drag
     setDragStartPos({ x: e.clientX, y: e.clientY })
@@ -296,95 +300,180 @@ export function EnhancedSidebar({
     
     // For folders, require more movement to start drag (harder to accidentally drag)
     const entry = entries.find(ent => ent.path === filePath)
-    const threshold = entry?.is_dir ? 10 : 5
-    const minTime = entry?.is_dir ? 150 : 50 // Delay for folders to allow clicking
+    const threshold = entry?.is_dir ? 15 : 5
+    const minTime = entry?.is_dir ? 200 : 50 // Delay for folders to allow clicking
     
     // Start drag if mouse moved more than threshold pixels AND enough time has passed
     if ((deltaX > threshold || deltaY > threshold) && timeElapsed > minTime) {
-      console.log("[v0] Starting drag for:", filePath)
       setIsDragging(true)
       setDraggedItem(filePath)
       setMousePos({ x: e.clientX, y: e.clientY })
     }
   }
 
-  const handleMouseEnter = (targetPath: string) => {
-    console.log("[v0] Mouse enter target:", targetPath, "isDragging:", isDragging, "draggedItem:", draggedItem)
-    
+  const handleMouseEnter = (targetPath: string, depth: number = 0, event?: React.MouseEvent, context: string = "unknown") => {
+
     if (!isDragging || !draggedItem) return
-    
+
     // Try to find the target in entries first, then in file tree
     let targetEntry = entries.find(e => e.path === targetPath)
     if (!targetEntry) {
       targetEntry = findNodeByPath(fileTree, targetPath)?.entry
     }
-    
-    if (targetEntry?.is_dir && targetPath !== draggedItem) {
-      console.log("[v0] Hovering over valid folder:", targetPath)
-      setDragOverTarget(targetPath)
+
+    if (targetEntry && targetPath !== draggedItem && event && context === "tree") {
+      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+      const mouseY = event.clientY
+      const elementHeight = rect.height
+      const relativeY = mouseY - rect.top
+
+      if (targetEntry.is_dir) {
+        // For folders, create three zones: top 25% (before), middle 50% (into), bottom 25% (after)
+        const topZone = elementHeight * 0.25
+        const bottomZone = elementHeight * 0.75
+
+        if (relativeY < topZone) {
+          // Top zone - check if this is a folder exit or regular before placement
+          const draggedDir = getParentPath(draggedItem)
+          if (draggedDir === targetPath) {
+            // This is a folder exit to before position
+            setDragOverTarget(null)
+            const parentDepth = Math.max(0, getParentPath(targetPath).split(/[\\/]/).filter(p => p).length)
+            const spacingInfo = { position: "before" as const, path: targetPath, depth: parentDepth }
+            setInsertionLine(spacingInfo)
+            setAnimatedSpacing(spacingInfo)
+          } else {
+            // Regular before placement
+            setDragOverTarget(null)
+            const spacingInfo = { position: "before" as const, path: targetPath, depth }
+            setInsertionLine(spacingInfo)
+            setAnimatedSpacing(spacingInfo)
+          }
+        } else if (relativeY > bottomZone) {
+          // Bottom zone - check if this is a folder exit or regular after placement
+          const draggedDir = getParentPath(draggedItem)
+          if (draggedDir === targetPath) {
+            // This is a folder exit to after position
+            setDragOverTarget(null)
+            const parentDepth = Math.max(0, getParentPath(targetPath).split(/[\\/]/).filter(p => p).length)
+            const spacingInfo = { position: "after" as const, path: targetPath, depth: parentDepth }
+            setInsertionLine(spacingInfo)
+            setAnimatedSpacing(spacingInfo)
+          } else {
+            // Regular after placement
+            setDragOverTarget(null)
+            const spacingInfo = { position: "after" as const, path: targetPath, depth }
+            setInsertionLine(spacingInfo)
+            setAnimatedSpacing(spacingInfo)
+          }
+        } else {
+          // Middle zone - place into folder
+          setDragOverTarget(targetPath)
+          setInsertionLine(null)
+          setAnimatedSpacing(null)
+        }
+      } else {
+        // For files, use simple before/after based on middle
+        const elementMiddle = rect.top + rect.height / 2
+        const position = mouseY < elementMiddle ? "before" : "after"
+
+        setDragOverTarget(null)
+        const spacingInfo = { position: position as "before" | "after", path: targetPath, depth }
+        setInsertionLine(spacingInfo)
+        setAnimatedSpacing(spacingInfo)
+      }
     } else {
       setDragOverTarget(null)
+      setInsertionLine(null)
+      setAnimatedSpacing(null)
+    }
+  }
+
+  // Handle mouse enter for folder exit zones
+  const handleFolderExitZoneEnter = (folderPath: string, event: React.MouseEvent) => {
+    if (!isDragging || !draggedItem) return
+
+    // Check if dragged item is inside this folder
+    const draggedDir = getParentPath(draggedItem)
+    if (draggedDir === folderPath) {
+      setDragOverTarget(null)
+
+      // Show insertion line at the parent directory level (one level up from folder)
+      const parentDepth = Math.max(0, getParentPath(folderPath).split(/[\\/]/).filter(p => p).length)
+      const spacingInfo = { position: "after" as const, path: folderPath, depth: parentDepth }
+      setInsertionLine(spacingInfo)
+      setAnimatedSpacing(spacingInfo)
     }
   }
 
   const handleMouseLeave = () => {
     if (!isDragging) return
     setDragOverTarget(null)
+    setInsertionLine(null)
+    setAnimatedSpacing(null)
   }
 
   const handleMouseUp = async (targetPath?: string) => {
-    console.log("[v0] Mouse up on:", targetPath, "isDragging:", isDragging, "draggedItem:", draggedItem)
-    
+
     // If we're not dragging, this might be a click
     if (!isDragging || !draggedItem) {
       // Check if this was a quick click (not a drag)
-      if (targetPath && dragStartTime && (Date.now() - dragStartTime) < 200) {
+      if (targetPath && dragStartTime && dragStartPos) {
+        const timeElapsed = Date.now() - dragStartTime
+
         // Try to find the target in entries first, then in file tree
         let entry = entries.find(e => e.path === targetPath)
         if (!entry) {
           entry = findNodeByPath(fileTree, targetPath)?.entry
         }
-        console.log("[v0] Quick click detected on:", targetPath, "entry:", entry)
-        if (entry?.is_dir) {
-          console.log("[v0] Quick click on folder - toggling:", targetPath)
-          toggleFolder(targetPath)
-        } else if (entry && !entry.is_dir && entry.name.endsWith('.md')) {
-          console.log("[v0] Quick click on file - selecting:", targetPath)
-          onSelectNote(targetPath)
+
+        // For folders, require shorter time and minimal movement for toggle
+        const isQuickClick = entry?.is_dir
+          ? timeElapsed < 250 // Longer time allowance for folders
+          : timeElapsed < 200
+
+
+        if (isQuickClick) {
+          if (entry?.is_dir) {
+            toggleFolder(targetPath)
+          } else if (entry && !entry.is_dir && entry.name.endsWith('.md')) {
+            onSelectNote(targetPath)
+          }
+        } else {
         }
       } else {
-        console.log("[v0] No quick click - dragStartTime:", dragStartTime, "timeElapsed:", dragStartTime ? Date.now() - dragStartTime : 'N/A')
       }
-      
+
       setDragStartPos(null)
       setDragStartTime(null)
       return
     }
-    
-    console.log("[v0] Mouse up - attempting drop on:", targetPath)
-    
-    if (targetPath && targetPath !== draggedItem) {
+
+
+    // Handle reordering if we have an insertion line (highest priority)
+    if (insertionLine) {
+      await performReorder(draggedItem, insertionLine)
+    } else if (targetPath && targetPath !== draggedItem) {
       // Try to find the target in entries first, then in file tree
       let targetEntry = entries.find(e => e.path === targetPath)
       if (!targetEntry) {
         targetEntry = findNodeByPath(fileTree, targetPath)?.entry
       }
-      console.log("[v0] Drop target entry:", targetEntry)
       if (targetEntry?.is_dir) {
-        console.log("[v0] Dropping into folder:", targetPath)
         await performDrop(draggedItem, targetPath)
       } else {
-        console.log("[v0] Drop target is not a directory or not found:", targetPath, "isDir:", targetEntry?.is_dir)
       }
     }
-    
+
     // Reset drag state
     setIsDragging(false)
     setDragOverTarget(null)
+    setInsertionLine(null)
+    setAnimatedSpacing(null)
     setDragStartPos(null)
     setDragStartTime(null)
     setMousePos(null)
-    
+
     // Delay clearing draggedItem to prevent immediate clicks
     setTimeout(() => {
       setDraggedItem(null)
@@ -395,33 +484,114 @@ export function EnhancedSidebar({
     try {
       const fileName = sourcePath.split(/[\\/]/).pop()!
       const separator = targetFolderPath.includes("\\") ? "\\" : "/"
-      const newPath = targetFolderPath + separator + fileName
-      
-      console.log("[v0] Moving:", { from: sourcePath, to: newPath })
-      
+      const newPath = targetFolderPath ? targetFolderPath + separator + fileName : fileName
+
+
       await renameEntry(sourcePath, newPath)
       await loadEntries()
-      
+
       if (selectedNote === sourcePath) {
         onSelectNote(newPath)
         onNoteRenamed?.(sourcePath, newPath)
       }
-      
-      console.log("[v0] Move completed successfully")
+
     } catch (error) {
-      console.error("[v0] Move failed:", error)
+      console.error("Move failed:", error)
       alert(`Failed to move: ${error}`)
     }
   }
 
+  const performReorder = async (sourcePath: string, insertionInfo: { position: "before" | "after"; path: string; depth?: number }) => {
+    try {
+
+      // Check if this is a folder exit operation (dragging from inside folder to outside)
+      const sourceDir = getParentPath(sourcePath)
+      const draggedEntry = entries.find(e => e.path === insertionInfo.path)
+
+      if (draggedEntry?.is_dir && sourceDir === insertionInfo.path) {
+        // This is a folder exit - move file from inside folder to parent directory
+        const fileName = sourcePath.split(/[\\/]/).pop()!
+        const targetDir = getParentPath(insertionInfo.path)
+        const separator = targetDir ? (targetDir.includes("\\") ? "\\" : "/") : ""
+        const newPath = targetDir ? targetDir + separator + fileName : fileName
+
+
+        await renameEntry(sourcePath, newPath)
+
+        // Now handle the ordering within the target directory
+        if (insertionInfo.position === "before" || insertionInfo.position === "after") {
+          await reorderEntries(targetDir || null, newPath, insertionInfo.path, insertionInfo.position)
+        }
+
+        await loadEntries()
+
+        if (selectedNote === sourcePath) {
+          onSelectNote(newPath)
+          onNoteRenamed?.(sourcePath, newPath)
+        }
+
+        return
+      }
+
+      // Get the target directory based on the insertion target's parent
+      const targetDir = getParentPath(insertionInfo.path)
+
+
+      // Only move between directories if they're actually different
+      if (targetDir !== sourceDir) {
+        const fileName = sourcePath.split(/[\\/]/).pop()!
+        const separator = targetDir ? (targetDir.includes("\\") ? "\\" : "/") : ""
+        const newPath = targetDir ? targetDir + separator + fileName : fileName
+
+        await renameEntry(sourcePath, newPath)
+        await loadEntries()
+
+        if (selectedNote === sourcePath) {
+          onSelectNote(newPath)
+          onNoteRenamed?.(sourcePath, newPath)
+        }
+      } else {
+        // Same directory reordering - use new reorder API
+
+        const dirPath = sourceDir || null // null for root directory
+        await reorderEntries(dirPath, sourcePath, insertionInfo.path, insertionInfo.position)
+        await loadEntries()
+      }
+
+    } catch (error) {
+      console.error("Reorder failed:", error)
+      alert(`Failed to reorder: ${error}`)
+    }
+  }
+
+
   // Add global mouse up handler to handle drops anywhere
   useEffect(() => {
-    const handleGlobalMouseUp = () => {
+    const handleGlobalMouseUp = (e: MouseEvent) => {
       if (isDragging) {
-        console.log("[v0] Global mouse up - canceling drag")
+
+        // Only handle root drops if there's no insertion line (insertion line takes priority)
+        if (!insertionLine) {
+          // Check if we're dropping on the sidebar background (root directory)
+          const sidebar = document.querySelector('aside')
+          if (sidebar && sidebar.contains(e.target as Node)) {
+            const isOnFileItem = (e.target as Element).closest('[data-file-path]')
+            if (!isOnFileItem && draggedItem) {
+              // Dropping on sidebar background - move to root
+              const fileName = draggedItem.split(/[\\/]/).pop()!
+              if (fileName !== draggedItem) { // Only if it's currently in a subfolder
+                performDrop(draggedItem, "").catch(console.error)
+              }
+            }
+          }
+        } else {
+        }
+
         setIsDragging(false)
         setDraggedItem(null)
         setDragOverTarget(null)
+        setInsertionLine(null)
+        setAnimatedSpacing(null)
         setDragStartPos(null)
         setDragStartTime(null)
         setMousePos(null)
@@ -436,12 +606,12 @@ export function EnhancedSidebar({
 
     document.addEventListener("mouseup", handleGlobalMouseUp)
     document.addEventListener("mousemove", handleGlobalMouseMove)
-    
+
     return () => {
       document.removeEventListener("mouseup", handleGlobalMouseUp)
       document.removeEventListener("mousemove", handleGlobalMouseMove)
     }
-  }, [isDragging])
+  }, [isDragging, draggedItem, insertionLine, animatedSpacing])
 
   const TreeNode: React.FC<{ node: FileTreeNode; depth: number; siblings?: FileTreeNode[] }> = ({
     node,
@@ -454,27 +624,46 @@ export function EnhancedSidebar({
     const showInsertionBefore = insertionLine?.position === "before" && insertionLine.path === node.entry.path
     const isBeingDragged = draggedItem === node.entry.path
     const showInsertionAfter = insertionLine?.position === "after" && insertionLine.path === node.entry.path
+    const insertionDepth = insertionLine?.depth || 0
+
+    // Animated spacing logic
+    const spacingBefore = animatedSpacing?.position === "before" && animatedSpacing.path === node.entry.path
+    const spacingAfter = animatedSpacing?.position === "after" && animatedSpacing.path === node.entry.path
 
     return (
       <div key={node.entry.path} style={{ marginLeft: `${depth * 12}px` }}>
-        {showInsertionBefore && <div className="h-0.5 bg-blue-400 rounded-full mx-2 mb-1" />}
+        {spacingBefore && (
+          <div
+            className="transition-all duration-300 ease-out overflow-hidden"
+            style={{
+              height: isDragging ? '48px' : '0px',
+              marginLeft: `${insertionDepth * 12 + 8}px`,
+              marginRight: '8px',
+            }}
+          >
+            <div className="h-12 bg-blue-50 dark:bg-blue-950/20 border-2 border-dashed border-blue-400 rounded-lg flex items-center justify-center opacity-75">
+              <div className="text-xs text-blue-600 dark:text-blue-400 font-medium">Drop here</div>
+            </div>
+          </div>
+        )}
 
         <div
+          data-file-path={node.entry.path}
           onMouseDown={(e) => handleMouseDown(e, node.entry.path)}
           onMouseMove={(e) => handleMouseMove(e, node.entry.path)}
-          onMouseEnter={() => handleMouseEnter(node.entry.path)}
+          onMouseEnter={(e) => handleMouseEnter(node.entry.path, depth, e, "tree")}
           onMouseLeave={handleMouseLeave}
           onMouseUp={(e) => {
-            console.log("[v0] Mouse up on:", node.entry.path)
             handleMouseUp(node.entry.path)
           }}
           className={cn(
             "group relative flex items-center justify-between p-2 rounded-md transition-all duration-200 select-none",
             isSelected && "bg-sidebar-accent text-sidebar-accent-foreground",
             !isSelected && "hover:bg-sidebar-accent/50 text-sidebar-foreground",
-            isDraggedOver && node.entry.is_dir && "bg-blue-100 dark:bg-blue-900/30 ring-2 ring-blue-400 ring-inset",
+            isDraggedOver && node.entry.is_dir && "bg-blue-100 dark:bg-blue-900/30 ring-2 ring-blue-400 ring-inset transform scale-105",
             isBeingDragged && "opacity-50 scale-95 transform",
-            node.entry.is_dir ? "cursor-pointer" : "cursor-grab active:cursor-grabbing",
+            node.entry.is_dir ? "cursor-grab active:cursor-grabbing" : "cursor-grab active:cursor-grabbing",
+            isDragging && draggedItem !== node.entry.path && node.entry.is_dir && "cursor-copy",
             isDragging && "cursor-grabbing"
           )}
         >
@@ -487,9 +676,15 @@ export function EnhancedSidebar({
                   <ChevronRight className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
                 )}
                 {node.isExpanded ? (
-                  <FolderOpen className="h-4 w-4 flex-shrink-0 text-blue-500" />
+                  <FolderOpen className={cn(
+                    "h-4 w-4 flex-shrink-0 text-blue-500 transition-all duration-200",
+                    isDraggedOver && "text-blue-600 scale-110"
+                  )} />
                 ) : (
-                  <FolderClosed className="h-4 w-4 flex-shrink-0 text-blue-500" />
+                  <FolderClosed className={cn(
+                    "h-4 w-4 flex-shrink-0 text-blue-500 transition-all duration-200",
+                    isDraggedOver && "text-blue-600 scale-110"
+                  )} />
                 )}
               </>
             ) : (
@@ -518,7 +713,20 @@ export function EnhancedSidebar({
           </div>
         </div>
 
-        {showInsertionAfter && <div className="h-0.5 bg-blue-400 rounded-full mx-2 mt-1" />}
+        {spacingAfter && (
+          <div
+            className="transition-all duration-300 ease-out overflow-hidden"
+            style={{
+              height: isDragging ? '48px' : '0px',
+              marginLeft: `${insertionDepth * 12 + 8}px`,
+              marginRight: '8px',
+            }}
+          >
+            <div className="h-12 bg-blue-50 dark:bg-blue-950/20 border-2 border-dashed border-blue-400 rounded-lg flex items-center justify-center opacity-75">
+              <div className="text-xs text-blue-600 dark:text-blue-400 font-medium">Drop here</div>
+            </div>
+          </div>
+        )}
 
         {node.entry.is_dir && node.isExpanded && (
           <div>
@@ -531,14 +739,34 @@ export function EnhancedSidebar({
                 Empty folder
               </div>
             )}
+
+            {/* Folder exit zone - allows dragging files out of this folder */}
+            {isDragging && draggedItem && getParentPath(draggedItem) === node.entry.path && (
+              <div
+                className="folder-exit-zone h-6 -mt-1 transition-all duration-200 bg-blue-50 dark:bg-blue-950/20 border-t-2 border-dashed border-blue-400 dark:border-blue-500 cursor-pointer z-10"
+                style={{ marginLeft: `${depth * 12}px` }}
+                onMouseEnter={(e) => handleFolderExitZoneEnter(node.entry.path, e)}
+                onMouseLeave={handleMouseLeave}
+                onMouseUp={() => handleMouseUp(node.entry.path)}
+              >
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-xs text-blue-600 dark:text-blue-400 font-medium opacity-75">
+                    ↑ Drag here to move out of folder
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
     )
   }
 
-  // Filter entries based on search
-  const filteredEntries = entries.filter((entry) => entry.name.toLowerCase().includes(searchQuery.toLowerCase()))
+  // Filter entries based on search and hide .tau_order.json files
+  const filteredEntries = entries.filter((entry) =>
+    entry.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
+    !entry.name.endsWith('.tau_order.json')
+  )
 
   useEffect(() => {
     loadEntries()
@@ -566,7 +794,10 @@ export function EnhancedSidebar({
 
   return (
     <aside
-      className="fixed left-0 top-0 h-full w-64 bg-sidebar border-r border-sidebar-border z-50 flex flex-col"
+      className={cn(
+        "fixed left-0 top-0 h-full w-64 bg-sidebar border-r border-sidebar-border z-50 flex flex-col",
+        isDragging && "bg-blue-50 dark:bg-blue-950/20"
+      )}
     >
       <div className="p-4 border-b border-sidebar-border">
         <div className="flex items-center justify-between mb-4">
@@ -623,9 +854,10 @@ export function EnhancedSidebar({
                   {recentNotes.map((note) => (
                     <div
                       key={`recent-${note.path}`}
+                      data-file-path={note.path}
                       onMouseDown={(e) => handleMouseDown(e, note.path)}
                       onMouseMove={(e) => handleMouseMove(e, note.path)}
-                      onMouseEnter={() => handleMouseEnter(note.path)}
+                      onMouseEnter={(e) => handleMouseEnter(note.path, 0, e, "recent")}
                       onMouseLeave={handleMouseLeave}
                       onMouseUp={() => handleMouseUp(note.path)}
                       className={cn(
@@ -673,9 +905,10 @@ export function EnhancedSidebar({
                     {filteredEntries.map((entry) => (
                       <div
                         key={entry.path}
+                        data-file-path={entry.path}
                         onMouseDown={(e) => handleMouseDown(e, entry.path)}
                         onMouseMove={(e) => handleMouseMove(e, entry.path)}
-                        onMouseEnter={() => handleMouseEnter(entry.path)}
+                        onMouseEnter={(e) => handleMouseEnter(entry.path, 0, e, "search")}
                         onMouseLeave={handleMouseLeave}
                         onMouseUp={() => handleMouseUp(entry.path)}
                         className={cn(
