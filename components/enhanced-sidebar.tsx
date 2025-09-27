@@ -275,11 +275,13 @@ export function EnhancedSidebar({
   const handleDragOver = (e: React.DragEvent, targetPath?: string) => {
     if (!draggedItem) return
     e.preventDefault()
+    e.stopPropagation() // Stop event propagation to prevent conflicts
     e.dataTransfer.dropEffect = "move"
     setDragOverTarget(targetPath || "__ROOT__")
   }
 
   const handleDragLeave = (e: React.DragEvent) => {
+    e.stopPropagation() // Stop event propagation
     // Only clear if we're actually leaving the target
     if (!e.currentTarget.contains(e.relatedTarget as Node)) {
       setDragOverTarget(null)
@@ -288,9 +290,13 @@ export function EnhancedSidebar({
 
   const handleDrop = async (e: React.DragEvent, targetPath?: string) => {
     e.preventDefault()
+    e.stopPropagation() // Stop event propagation
+    console.log("[v0] Drop event triggered for:", targetPath || "root")
+
     const droppedPath = e.dataTransfer.getData("text/plain")
 
     if (!droppedPath || droppedPath === targetPath) {
+      console.log("[v0] Invalid drop - same path or no dragged item")
       setDraggedItem(null)
       setDragOverTarget(null)
       return
@@ -341,9 +347,9 @@ export function EnhancedSidebar({
           draggable
           onDragStart={(e) => handleDragStart(e, node.entry.path)}
           onDragEnd={handleDragEnd}
-          onDragOver={(e) => (node.entry.is_dir ? handleDragOver(e, node.entry.path) : e.preventDefault())}
+          onDragOver={(e) => handleDragOver(e, node.entry.is_dir ? node.entry.path : undefined)} // Only allow drop on folders
           onDragLeave={handleDragLeave}
-          onDrop={(e) => (node.entry.is_dir ? handleDrop(e, node.entry.path) : undefined)}
+          onDrop={(e) => handleDrop(e, node.entry.is_dir ? node.entry.path : undefined)} // Only handle drop on folders
           onClick={(e) => {
             if (node.entry.is_dir) {
               toggleFolder(node.entry.path)
@@ -444,8 +450,9 @@ export function EnhancedSidebar({
   return (
     <aside
       className="fixed left-0 top-0 h-full w-64 bg-sidebar border-r border-sidebar-border z-50 flex flex-col"
-      onDragOver={(e) => handleDragOver(e)}
-      onDrop={(e) => handleDrop(e)}
+      onDragOver={(e) => handleDragOver(e)} // Root drop zone drag over
+      onDragLeave={handleDragLeave} // Add drag leave for root
+      onDrop={(e) => handleDrop(e)} // Root drop zone drop handler
     >
       <div className="p-4 border-b border-sidebar-border">
         <div className="flex items-center justify-between mb-4">
