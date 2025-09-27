@@ -56,6 +56,10 @@ export function EnhancedSidebar({
   const [draggedItem, setDraggedItem] = useState<string | null>(null)
   const [dragOverTarget, setDragOverTarget] = useState<string | null>(null)
   const [insertionLine, setInsertionLine] = useState<{ position: "before" | "after"; path: string } | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStartPos, setDragStartPos] = useState<{ x: number; y: number } | null>(null)
+  const [dragStartTime, setDragStartTime] = useState<number | null>(null)
+  const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
   const [recentNotes, setRecentNotes] = useState<Entry[]>([])
   const [expandedPaths, setExpandedPaths] = useState<string[]>([])
 
@@ -251,121 +255,164 @@ export function EnhancedSidebar({
     }
   }
 
-  const handleDragStart = (e: React.DragEvent, filePath: string) => {
-    e.stopPropagation()
-
-    if (draggedItem === filePath) {
-      console.log("[v0] Drag already in progress for:", filePath)
+  const handleMouseDown = (e: React.MouseEvent, filePath: string) => {
+    // Only start drag on left mouse button
+    if (e.button !== 0) return
+    
+    console.log("[v0] Mouse down on:", filePath)
+    
+    // Record the start position and time for potential drag
+    setDragStartPos({ x: e.clientX, y: e.clientY })
+    setDragStartTime(Date.now())
+    
+    // For files, prevent text selection
+    const entry = entries.find(ent => ent.path === filePath)
+    if (!entry?.is_dir) {
       e.preventDefault()
-      return
     }
-
-    console.log("[v0] Drag start:", filePath)
-    e.dataTransfer.effectAllowed = "move"
-    e.dataTransfer.setData("text/plain", filePath)
-    setDraggedItem(filePath)
-
-    // Add visual feedback
-    const dragImage = document.createElement("div")
-    dragImage.textContent = filePath.split(/[\\/]/).pop() || filePath
-    dragImage.style.cssText =
-      "position: absolute; top: -1000px; background: var(--sidebar-accent); padding: 8px; border-radius: 4px; font-size: 12px;"
-    document.body.appendChild(dragImage)
-    e.dataTransfer.setDragImage(dragImage, 0, 0)
-    setTimeout(() => document.body.removeChild(dragImage), 0)
   }
 
-  const handleDragEnd = (e: React.DragEvent) => {
-    e.stopPropagation()
-    console.log("[v0] Drag end - resetting state")
-    setDraggedItem(null)
-    setDragOverTarget(null)
-    setInsertionLine(null)
+  const handleMouseMove = (e: React.MouseEvent, filePath: string) => {
+    // Always update mouse position when dragging
+    if (isDragging) {
+      setMousePos({ x: e.clientX, y: e.clientY })
+    }
+    
+    if (!dragStartPos || !dragStartTime || isDragging) return
+    
+    const deltaX = Math.abs(e.clientX - dragStartPos.x)
+    const deltaY = Math.abs(e.clientY - dragStartPos.y)
+    const timeElapsed = Date.now() - dragStartTime
+    
+    // For folders, require more movement to start drag (harder to accidentally drag)
+    const entry = entries.find(ent => ent.path === filePath)
+    const threshold = entry?.is_dir ? 10 : 5
+    const minTime = entry?.is_dir ? 150 : 50 // Delay for folders to allow clicking
+    
+    // Start drag if mouse moved more than threshold pixels AND enough time has passed
+    if ((deltaX > threshold || deltaY > threshold) && timeElapsed > minTime) {
+      console.log("[v0] Starting drag for:", filePath)
+      setIsDragging(true)
+      setDraggedItem(filePath)
+      setMousePos({ x: e.clientX, y: e.clientY })
+    }
   }
 
-  const handleDragOver = (e: React.DragEvent, targetPath?: string, position?: "before" | "after") => {
-    if (!draggedItem) return
-    e.preventDefault()
-    e.stopPropagation()
-    e.dataTransfer.dropEffect = "move"
-
-    if (position && targetPath) {
-      setInsertionLine({ position, path: targetPath })
-      setDragOverTarget(null)
-    } else if (targetPath) {
+  const handleMouseEnter = (targetPath: string) => {
+    if (!isDragging || !draggedItem) return
+    
+    console.log("[v0] Mouse enter target:", targetPath)
+    
+    const targetEntry = entries.find(e => e.path === targetPath)
+    if (targetEntry?.is_dir && targetPath !== draggedItem) {
+      console.log("[v0] Hovering over valid folder:", targetPath)
       setDragOverTarget(targetPath)
-      setInsertionLine(null)
     } else {
-      setDragOverTarget("__ROOT__")
-      setInsertionLine(null)
-    }
-  }
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.stopPropagation()
-    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
       setDragOverTarget(null)
-      setInsertionLine(null)
     }
   }
 
-  const handleDrop = async (e: React.DragEvent, targetPath?: string, position?: "before" | "after") => {
-    e.preventDefault()
-    e.stopPropagation()
-    console.log("[v0] Drop event triggered for:", targetPath || "root", position ? `(${position})` : "")
+  const handleMouseLeave = () => {
+    if (!isDragging) return
+    setDragOverTarget(null)
+  }
 
-    const droppedPath = e.dataTransfer.getData("text/plain")
-
-    if (!draggedItem || !droppedPath) {
-      console.log("[v0] Invalid drop - no dragged item")
-      handleDragEnd(e) // Reset state
-      return
-    }
-
-    if (droppedPath === targetPath) {
-      console.log("[v0] Invalid drop - same path")
-      handleDragEnd(e) // Reset state
-      return
-    }
-
-    try {
-      const fileName = droppedPath.split(/[\\/]/).pop()!
-      let newPath: string
-
-      if (position && targetPath) {
-        const targetParent = getParentPath(targetPath)
-        const separator = targetPath.includes("\\") ? "\\" : "/"
-        newPath = targetParent ? targetParent + separator + fileName : fileName
-        console.log("[v0] Reordering to same directory as:", targetPath)
-      } else if (!targetPath || targetPath === "__ROOT__") {
-        newPath = fileName
-      } else {
-        const targetEntry = entries.find((e) => e.path === targetPath)
-        if (!targetEntry?.is_dir) {
-          console.log("[v0] Invalid drop - target is not a directory")
-          handleDragEnd(e) // Reset state
-          return
+  const handleMouseUp = async (targetPath?: string) => {
+    console.log("[v0] Mouse up on:", targetPath, "isDragging:", isDragging, "draggedItem:", draggedItem)
+    
+    // If we're not dragging, this might be a click
+    if (!isDragging || !draggedItem) {
+      // Check if this was a quick click (not a drag)
+      if (targetPath && dragStartTime && (Date.now() - dragStartTime) < 200) {
+        const entry = entries.find(e => e.path === targetPath)
+        if (entry?.is_dir) {
+          console.log("[v0] Quick click on folder - toggling:", targetPath)
+          toggleFolder(targetPath)
+        } else if (entry && !entry.is_dir && entry.name.endsWith('.md')) {
+          console.log("[v0] Quick click on file - selecting:", targetPath)
+          onSelectNote(targetPath)
         }
-
-        const separator = targetPath.includes("\\") ? "\\" : "/"
-        newPath = targetPath + separator + fileName
       }
+      
+      setDragStartPos(null)
+      setDragStartTime(null)
+      return
+    }
+    
+    console.log("[v0] Mouse up - attempting drop on:", targetPath)
+    
+    if (targetPath && targetPath !== draggedItem) {
+      const targetEntry = entries.find(e => e.path === targetPath)
+      if (targetEntry?.is_dir) {
+        console.log("[v0] Dropping into folder:", targetPath)
+        await performDrop(draggedItem, targetPath)
+      }
+    }
+    
+    // Reset drag state
+    setIsDragging(false)
+    setDragOverTarget(null)
+    setDragStartPos(null)
+    setDragStartTime(null)
+    setMousePos(null)
+    
+    // Delay clearing draggedItem to prevent immediate clicks
+    setTimeout(() => {
+      setDraggedItem(null)
+    }, 50)
+  }
 
-      console.log("[v0] Moving file from", droppedPath, "to", newPath)
-      await renameEntry(droppedPath, newPath)
+  const performDrop = async (sourcePath: string, targetFolderPath: string) => {
+    try {
+      const fileName = sourcePath.split(/[\\/]/).pop()!
+      const separator = targetFolderPath.includes("\\") ? "\\" : "/"
+      const newPath = targetFolderPath + separator + fileName
+      
+      console.log("[v0] Moving:", { from: sourcePath, to: newPath })
+      
+      await renameEntry(sourcePath, newPath)
       await loadEntries()
-
-      if (selectedNote === droppedPath) {
+      
+      if (selectedNote === sourcePath) {
         onSelectNote(newPath)
-        onNoteRenamed?.(droppedPath, newPath)
+        onNoteRenamed?.(sourcePath, newPath)
       }
+      
+      console.log("[v0] Move completed successfully")
     } catch (error) {
-      console.error("Failed to move file:", error)
-      alert(`Failed to move file: ${error}`)
-    } finally {
-      handleDragEnd(e)
+      console.error("[v0] Move failed:", error)
+      alert(`Failed to move: ${error}`)
     }
   }
+
+  // Add global mouse up handler to handle drops anywhere
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      if (isDragging) {
+        console.log("[v0] Global mouse up - canceling drag")
+        setIsDragging(false)
+        setDraggedItem(null)
+        setDragOverTarget(null)
+        setDragStartPos(null)
+        setDragStartTime(null)
+        setMousePos(null)
+      }
+    }
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      if (isDragging) {
+        setMousePos({ x: e.clientX, y: e.clientY })
+      }
+    }
+
+    document.addEventListener("mouseup", handleGlobalMouseUp)
+    document.addEventListener("mousemove", handleGlobalMouseMove)
+    
+    return () => {
+      document.removeEventListener("mouseup", handleGlobalMouseUp)
+      document.removeEventListener("mousemove", handleGlobalMouseMove)
+    }
+  }, [isDragging])
 
   const TreeNode: React.FC<{ node: FileTreeNode; depth: number; siblings?: FileTreeNode[] }> = ({
     node,
@@ -376,6 +423,7 @@ export function EnhancedSidebar({
     const isMarkdownFile = !node.entry.is_dir && node.entry.name.endsWith(".md")
     const isDraggedOver = dragOverTarget === node.entry.path
     const showInsertionBefore = insertionLine?.position === "before" && insertionLine.path === node.entry.path
+    const isBeingDragged = draggedItem === node.entry.path
     const showInsertionAfter = insertionLine?.position === "after" && insertionLine.path === node.entry.path
 
     return (
@@ -383,43 +431,22 @@ export function EnhancedSidebar({
         {showInsertionBefore && <div className="h-0.5 bg-blue-400 rounded-full mx-2 mb-1" />}
 
         <div
-          draggable={true}
-          onDragStart={(e) => handleDragStart(e, node.entry.path)}
-          onDragEnd={handleDragEnd}
-          onDragOver={(e) => {
-            if (node.entry.is_dir) {
-              handleDragOver(e, node.entry.path)
-            } else {
-              const rect = e.currentTarget.getBoundingClientRect()
-              const midpoint = rect.top + rect.height / 2
-              const position = e.clientY < midpoint ? "before" : "after"
-              handleDragOver(e, node.entry.path, position)
-            }
-          }}
-          onDragLeave={handleDragLeave}
-          onDrop={(e) => {
-            if (node.entry.is_dir) {
-              handleDrop(e, node.entry.path)
-            } else {
-              const rect = e.currentTarget.getBoundingClientRect()
-              const midpoint = rect.top + rect.height / 2
-              const position = e.clientY < midpoint ? "before" : "after"
-              handleDrop(e, node.entry.path, position)
-            }
-          }}
-          onClick={(e) => {
-            e.stopPropagation()
-            if (node.entry.is_dir) {
-              toggleFolder(node.entry.path)
-            } else if (isMarkdownFile) {
-              onSelectNote(node.entry.path)
-            }
+          onMouseDown={(e) => handleMouseDown(e, node.entry.path)}
+          onMouseMove={(e) => handleMouseMove(e, node.entry.path)}
+          onMouseEnter={() => handleMouseEnter(node.entry.path)}
+          onMouseLeave={handleMouseLeave}
+          onMouseUp={(e) => {
+            console.log("[v0] Mouse up on:", node.entry.path)
+            handleMouseUp(node.entry.path)
           }}
           className={cn(
-            "group relative flex items-center justify-between p-2 rounded-md transition-all duration-200 select-none cursor-pointer",
+            "group relative flex items-center justify-between p-2 rounded-md transition-all duration-200 select-none",
             isSelected && "bg-sidebar-accent text-sidebar-accent-foreground",
             !isSelected && "hover:bg-sidebar-accent/50 text-sidebar-foreground",
             isDraggedOver && node.entry.is_dir && "bg-blue-100 dark:bg-blue-900/30 ring-2 ring-blue-400 ring-inset",
+            isBeingDragged && "opacity-50 scale-95 transform",
+            node.entry.is_dir ? "cursor-pointer" : "cursor-grab active:cursor-grabbing",
+            isDragging && "cursor-grabbing"
           )}
         >
           <div className="flex items-center gap-1 flex-1 min-w-0">
@@ -511,9 +538,6 @@ export function EnhancedSidebar({
   return (
     <aside
       className="fixed left-0 top-0 h-full w-64 bg-sidebar border-r border-sidebar-border z-50 flex flex-col"
-      onDragOver={(e) => handleDragOver(e)} // Root drop zone drag over
-      onDragLeave={handleDragLeave} // Add drag leave for root
-      onDrop={(e) => handleDrop(e)} // Root drop zone drop handler
     >
       <div className="p-4 border-b border-sidebar-border">
         <div className="flex items-center justify-between mb-4">
@@ -570,16 +594,18 @@ export function EnhancedSidebar({
                   {recentNotes.map((note) => (
                     <div
                       key={`recent-${note.path}`}
-                      draggable={draggedItem !== note.path}
-                      onDragStart={(e) => handleDragStart(e, note.path)}
-                      onDragEnd={handleDragEnd}
-                      onClick={() => onSelectNote(note.path)}
+                      onMouseDown={(e) => handleMouseDown(e, note.path)}
+                      onMouseMove={(e) => handleMouseMove(e, note.path)}
+                      onMouseEnter={() => handleMouseEnter(note.path)}
+                      onMouseLeave={handleMouseLeave}
+                      onMouseUp={() => handleMouseUp(note.path)}
                       className={cn(
                         "group flex items-center justify-between p-2 rounded-md cursor-pointer transition-all duration-200",
                         selectedNote === note.path
                           ? "bg-sidebar-accent text-sidebar-accent-foreground"
                           : "hover:bg-sidebar-accent/50 text-sidebar-foreground",
                         draggedItem === note.path && "opacity-50 scale-95",
+                        dragOverTarget === note.path && "bg-blue-100 dark:bg-blue-900/30 ring-2 ring-blue-400"
                       )}
                     >
                       <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -618,20 +644,18 @@ export function EnhancedSidebar({
                     {filteredEntries.map((entry) => (
                       <div
                         key={entry.path}
-                        draggable={draggedItem !== entry.path}
-                        onDragStart={(e) => handleDragStart(e, entry.path)}
-                        onDragEnd={handleDragEnd}
-                        onClick={() => {
-                          if (!entry.is_dir && entry.name.endsWith(".md")) {
-                            onSelectNote(entry.path)
-                          }
-                        }}
+                        onMouseDown={(e) => handleMouseDown(e, entry.path)}
+                        onMouseMove={(e) => handleMouseMove(e, entry.path)}
+                        onMouseEnter={() => handleMouseEnter(entry.path)}
+                        onMouseLeave={handleMouseLeave}
+                        onMouseUp={() => handleMouseUp(entry.path)}
                         className={cn(
                           "group flex items-center justify-between p-2 rounded-md cursor-pointer transition-all duration-200",
                           selectedNote === entry.path
                             ? "bg-sidebar-accent text-sidebar-accent-foreground"
                             : "hover:bg-sidebar-accent/50 text-sidebar-foreground",
                           draggedItem === entry.path && "opacity-50 scale-95",
+                          dragOverTarget === entry.path && "bg-blue-100 dark:bg-blue-900/30 ring-2 ring-blue-400"
                         )}
                       >
                         <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -680,6 +704,30 @@ export function EnhancedSidebar({
 
       {dragOverTarget === "__ROOT__" && (
         <div className="absolute inset-0 bg-blue-100/20 dark:bg-blue-900/20 border-2 border-dashed border-blue-400 rounded-lg pointer-events-none" />
+      )}
+      
+      {/* Floating Drag Preview */}
+      {isDragging && draggedItem && mousePos && (
+        <div
+          className="fixed pointer-events-none z-[9999] bg-sidebar border border-sidebar-border rounded-lg shadow-2xl px-3 py-2 text-sm text-sidebar-foreground scale-110"
+          style={{
+            left: mousePos.x - 60, // Offset to center better
+            top: mousePos.y - 20,  // Offset to be slightly above cursor
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)',
+            transform: 'none' // Remove CSS transitions for instant following
+          }}
+        >
+          <div className="flex items-center gap-2">
+            {entries.find(e => e.path === draggedItem)?.is_dir ? (
+              <FolderClosed className="h-4 w-4 text-blue-500" />
+            ) : (
+              <FileText className="h-4 w-4 text-gray-600" />
+            )}
+            <span className="font-medium">
+              {draggedItem.split(/[\\/]/).pop()?.replace('.md', '') || draggedItem}
+            </span>
+          </div>
+        </div>
       )}
     </aside>
   )
