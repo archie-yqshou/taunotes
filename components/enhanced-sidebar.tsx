@@ -159,8 +159,10 @@ export function EnhancedSidebar({
 
   // Lazy-load folder contents when expanding
   const loadChildrenForFolder = async (folderPath: string) => {
+    console.log("[v0] Loading children for folder:", folderPath)
     try {
       const children = await listEntries(folderPath)
+      console.log("[v0] Loaded children:", children.map(c => c.path))
       const childNodes: FileTreeNode[] = children.map((entry) => ({
         entry,
         children: [],
@@ -221,10 +223,17 @@ export function EnhancedSidebar({
   }
 
   const toggleFolder = (path: string) => {
+    console.log("[v0] toggleFolder called for:", path)
     // Determine current state before toggling
     const currentNode = findNodeByPath(fileTree, path)
     const isCurrentlyExpanded = currentNode?.isExpanded
     const hasChildrenLoaded = (currentNode?.children?.length || 0) > 0
+    
+    console.log("[v0] Current state:", { 
+      isCurrentlyExpanded, 
+      hasChildrenLoaded, 
+      childrenCount: currentNode?.children?.length 
+    })
 
     setFileTree((prev) => prev.map((node) => updateNodeExpansion(node, path)))
 
@@ -247,6 +256,7 @@ export function EnhancedSidebar({
 
   const updateNodeExpansion = (node: FileTreeNode, targetPath: string): FileTreeNode => {
     if (node.entry.path === targetPath) {
+      console.log("[v0] Updating expansion for:", targetPath, "from", node.isExpanded, "to", !node.isExpanded)
       return { ...node, isExpanded: !node.isExpanded }
     }
     return {
@@ -299,11 +309,16 @@ export function EnhancedSidebar({
   }
 
   const handleMouseEnter = (targetPath: string) => {
+    console.log("[v0] Mouse enter target:", targetPath, "isDragging:", isDragging, "draggedItem:", draggedItem)
+    
     if (!isDragging || !draggedItem) return
     
-    console.log("[v0] Mouse enter target:", targetPath)
+    // Try to find the target in entries first, then in file tree
+    let targetEntry = entries.find(e => e.path === targetPath)
+    if (!targetEntry) {
+      targetEntry = findNodeByPath(fileTree, targetPath)?.entry
+    }
     
-    const targetEntry = entries.find(e => e.path === targetPath)
     if (targetEntry?.is_dir && targetPath !== draggedItem) {
       console.log("[v0] Hovering over valid folder:", targetPath)
       setDragOverTarget(targetPath)
@@ -324,7 +339,12 @@ export function EnhancedSidebar({
     if (!isDragging || !draggedItem) {
       // Check if this was a quick click (not a drag)
       if (targetPath && dragStartTime && (Date.now() - dragStartTime) < 200) {
-        const entry = entries.find(e => e.path === targetPath)
+        // Try to find the target in entries first, then in file tree
+        let entry = entries.find(e => e.path === targetPath)
+        if (!entry) {
+          entry = findNodeByPath(fileTree, targetPath)?.entry
+        }
+        console.log("[v0] Quick click detected on:", targetPath, "entry:", entry)
         if (entry?.is_dir) {
           console.log("[v0] Quick click on folder - toggling:", targetPath)
           toggleFolder(targetPath)
@@ -332,6 +352,8 @@ export function EnhancedSidebar({
           console.log("[v0] Quick click on file - selecting:", targetPath)
           onSelectNote(targetPath)
         }
+      } else {
+        console.log("[v0] No quick click - dragStartTime:", dragStartTime, "timeElapsed:", dragStartTime ? Date.now() - dragStartTime : 'N/A')
       }
       
       setDragStartPos(null)
@@ -342,10 +364,17 @@ export function EnhancedSidebar({
     console.log("[v0] Mouse up - attempting drop on:", targetPath)
     
     if (targetPath && targetPath !== draggedItem) {
-      const targetEntry = entries.find(e => e.path === targetPath)
+      // Try to find the target in entries first, then in file tree
+      let targetEntry = entries.find(e => e.path === targetPath)
+      if (!targetEntry) {
+        targetEntry = findNodeByPath(fileTree, targetPath)?.entry
+      }
+      console.log("[v0] Drop target entry:", targetEntry)
       if (targetEntry?.is_dir) {
         console.log("[v0] Dropping into folder:", targetPath)
         await performDrop(draggedItem, targetPath)
+      } else {
+        console.log("[v0] Drop target is not a directory or not found:", targetPath, "isDir:", targetEntry?.is_dir)
       }
     }
     
