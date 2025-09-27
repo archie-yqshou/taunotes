@@ -283,6 +283,16 @@ export async function revealInOS(relativePath: string): Promise<void> {
   return Promise.resolve()
 }
 
+export async function reorderEntries(dirPath: string | null, source: string, target: string, position: "before" | "after"): Promise<void> {
+  if (isTauri && invoke) {
+    return invoke("reorder_entries", { dirPath, source, target, position })
+  }
+
+  // Mock implementation - log the reorder operation
+  console.log("Would reorder entries:", { dirPath, source, target, position })
+  return Promise.resolve()
+}
+
 // Dialog helpers
 export async function selectFolder(): Promise<string | null> {
   if (isTauri && open) {

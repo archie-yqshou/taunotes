@@ -21,7 +21,8 @@ pub fn run() {
         fs::reveal_in_os,
         fs::get_links_from_file,
         fs::get_all_links,
-        fs::suggest_links
+        fs::suggest_links,
+        fs::reorder_entries
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {
