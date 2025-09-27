@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
+use regex::Regex;
 
 #[derive(Default)]
 pub struct AppState {
@@ -14,6 +15,22 @@ pub struct Entry {
     pub path: String,
     pub is_dir: bool,
     pub modified: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Link {
+    pub source_file: String,
+    pub target_note: String,
+    pub display_text: Option<String>,
+    pub position: usize,
+    pub length: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LinkSuggestion {
+    pub note_name: String,
+    pub note_path: String,
+    pub similarity_score: f64,
 }
 
 #[tauri::command]
@@ -292,4 +309,179 @@ pub async fn reveal_in_os(app_handle: tauri::AppHandle, rel: String) -> Result<(
     }
     
     Ok(())
+}
+
+// Link parsing functions
+fn parse_links_from_content(content: &str, source_file: &str) -> Vec<Link> {
+    let mut links = Vec::new();
+    let link_regex = Regex::new(r"\[\[([^\[\]]+)\]\]").unwrap();
+    
+    for mat in link_regex.find_iter(content) {
+        let _full_match = mat.as_str();
+        let link_content = &content[mat.start() + 2..mat.end() - 2]; // Remove [[ and ]]
+        
+        let (target_note, display_text) = if let Some(pipe_pos) = link_content.find('|') {
+            let note = &link_content[..pipe_pos];
+            let display = &link_content[pipe_pos + 1..];
+            (note.to_string(), Some(display.to_string()))
+        } else {
+            (link_content.to_string(), None)
+        };
+        
+        links.push(Link {
+            source_file: source_file.to_string(),
+            target_note,
+            display_text,
+            position: mat.start(),
+            length: mat.end() - mat.start(),
+        });
+    }
+    
+    links
+}
+
+#[tauri::command]
+pub async fn get_links_from_file(app_handle: tauri::AppHandle, rel: String) -> Result<Vec<Link>, String> {
+    let state = app_handle.state::<std::sync::Mutex<AppState>>();
+    let state_guard = state.lock().map_err(|e| e.to_string())?;
+    
+    let base_path = match &state_guard.vault_path {
+        Some(vault_path) => vault_path,
+        None => return Err("No vault set".to_string()),
+    };
+    
+    let file_path = base_path.join(&rel);
+    
+    if !file_path.exists() {
+        return Err(format!("File '{}' does not exist", rel));
+    }
+    
+    let content = fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    
+    let links = parse_links_from_content(&content, &rel);
+    Ok(links)
+}
+
+#[tauri::command]
+pub async fn get_all_links(app_handle: tauri::AppHandle) -> Result<Vec<Link>, String> {
+    let state = app_handle.state::<std::sync::Mutex<AppState>>();
+    let state_guard = state.lock().map_err(|e| e.to_string())?;
+    
+    let base_path = match &state_guard.vault_path {
+        Some(vault_path) => vault_path,
+        None => return Err("No vault set".to_string()),
+    };
+    
+    let mut all_links = Vec::new();
+    
+    // Recursively walk through all markdown files
+    fn walk_dir(dir: &std::path::Path, base_path: &std::path::Path, links: &mut Vec<Link>) -> Result<(), String> {
+        let entries = fs::read_dir(dir)
+            .map_err(|e| format!("Failed to read directory: {}", e))?;
+            
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+            
+            if path.is_dir() {
+                walk_dir(&path, base_path, links)?;
+            } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                let relative_path = path
+                    .strip_prefix(base_path)
+                    .map_err(|e| format!("Failed to create relative path: {}", e))?
+                    .to_string_lossy()
+                    .to_string();
+                
+                let content = fs::read_to_string(&path)
+                    .map_err(|e| format!("Failed to read file: {}", e))?;
+                
+                let file_links = parse_links_from_content(&content, &relative_path);
+                links.extend(file_links);
+            }
+        }
+        
+        Ok(())
+    }
+    
+    walk_dir(base_path, base_path, &mut all_links)?;
+    Ok(all_links)
+}
+
+#[tauri::command]
+pub async fn suggest_links(app_handle: tauri::AppHandle, query: String) -> Result<Vec<LinkSuggestion>, String> {
+    let state = app_handle.state::<std::sync::Mutex<AppState>>();
+    let state_guard = state.lock().map_err(|e| e.to_string())?;
+    
+    let base_path = match &state_guard.vault_path {
+        Some(vault_path) => vault_path,
+        None => return Err("No vault set".to_string()),
+    };
+    
+    let mut suggestions = Vec::new();
+    let _query_lower = query.to_lowercase();
+    
+    // Simple similarity function (can be enhanced later)
+    fn calculate_similarity(query: &str, note_name: &str) -> f64 {
+        let query_lower = query.to_lowercase();
+        let note_lower = note_name.to_lowercase();
+        
+        if note_lower.contains(&query_lower) {
+            return 1.0 - (query_lower.len() as f64 / note_lower.len() as f64) * 0.5;
+        }
+        
+        // Simple character-based similarity
+        let common_chars = query_lower.chars()
+            .filter(|c| note_lower.contains(*c))
+            .count();
+        
+        common_chars as f64 / query_lower.len().max(note_lower.len()) as f64
+    }
+    
+    // Walk through all markdown files to find potential matches
+    fn find_notes(dir: &std::path::Path, base_path: &std::path::Path, query: &str, suggestions: &mut Vec<LinkSuggestion>) -> Result<(), String> {
+        let entries = fs::read_dir(dir)
+            .map_err(|e| format!("Failed to read directory: {}", e))?;
+            
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+            
+            if path.is_dir() {
+                find_notes(&path, base_path, query, suggestions)?;
+            } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                let relative_path = path
+                    .strip_prefix(base_path)
+                    .map_err(|e| format!("Failed to create relative path: {}", e))?
+                    .to_string_lossy()
+                    .to_string();
+                
+                let note_name = path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                
+                let similarity = calculate_similarity(&query, &note_name);
+                
+                if similarity > 0.1 { // Minimum similarity threshold
+                    suggestions.push(LinkSuggestion {
+                        note_name: note_name.clone(),
+                        note_path: relative_path,
+                        similarity_score: similarity,
+                    });
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    find_notes(base_path, base_path, &query, &mut suggestions)?;
+    
+    // Sort by similarity score (highest first)
+    suggestions.sort_by(|a, b| b.similarity_score.partial_cmp(&a.similarity_score).unwrap());
+    
+    // Return top 10 suggestions
+    suggestions.truncate(10);
+    Ok(suggestions)
 }

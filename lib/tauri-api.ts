@@ -5,6 +5,20 @@ export interface Entry {
   modified: string
 }
 
+export interface Link {
+  source_file: string
+  target_note: string
+  display_text?: string
+  position: number
+  length: number
+}
+
+export interface LinkSuggestion {
+  note_name: string
+  note_path: string
+  similarity_score: number
+}
+
 // Check if we're in a Tauri environment
 const isTauri = typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__
 
@@ -294,4 +308,79 @@ export async function selectFile(filters?: Array<{ name: string; extensions: str
 
   // Mock implementation - return a mock file path
   return Promise.resolve("/mock-selected-file.md")
+}
+
+// Link operations
+export async function getLinksFromFile(relativePath: string): Promise<Link[]> {
+  if (isTauri && invoke) {
+    return invoke("get_links_from_file", { rel: relativePath })
+  }
+
+  // Mock implementation
+  const mockLinks: Link[] = [
+    {
+      source_file: relativePath,
+      target_note: "Welcome.md",
+      display_text: "Welcome to Tau",
+      position: 100,
+      length: 25,
+    },
+    {
+      source_file: relativePath,
+      target_note: "Getting Started.md",
+      position: 200,
+      length: 20,
+    },
+  ]
+  return Promise.resolve(mockLinks)
+}
+
+export async function getAllLinks(): Promise<Link[]> {
+  if (isTauri && invoke) {
+    return invoke("get_all_links")
+  }
+
+  // Mock implementation
+  const mockAllLinks: Link[] = [
+    {
+      source_file: "Welcome.md",
+      target_note: "Getting Started.md",
+      display_text: "Getting Started",
+      position: 150,
+      length: 20,
+    },
+    {
+      source_file: "Getting Started.md",
+      target_note: "Welcome.md",
+      position: 80,
+      length: 15,
+    },
+  ]
+  return Promise.resolve(mockAllLinks)
+}
+
+export async function suggestLinks(query: string): Promise<LinkSuggestion[]> {
+  if (isTauri && invoke) {
+    return invoke("suggest_links", { query })
+  }
+
+  // Mock implementation
+  const mockSuggestions: LinkSuggestion[] = [
+    {
+      note_name: "Welcome",
+      note_path: "Welcome.md",
+      similarity_score: 0.9,
+    },
+    {
+      note_name: "Getting Started",
+      note_path: "Getting Started.md",
+      similarity_score: 0.7,
+    },
+    {
+      note_name: "Project Alpha",
+      note_path: "Projects/Project Alpha.md",
+      similarity_score: 0.5,
+    },
+  ]
+  return Promise.resolve(mockSuggestions)
 }

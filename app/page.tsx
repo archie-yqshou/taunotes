@@ -104,6 +104,10 @@ export default function HomePage() {
             }}
             shouldStartEditing={shouldStartEditing}
             onEditingStarted={() => setShouldStartEditing(false)}
+            onLinkClick={(notePath) => {
+              // Navigate to the linked note
+              setSelectedNote(notePath)
+            }}
           />
         </div>
       </main>

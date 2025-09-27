@@ -18,7 +18,10 @@ pub fn run() {
         fs::write_note,
         fs::rename_entry,
         fs::delete_entry,
-        fs::reveal_in_os
+        fs::reveal_in_os,
+        fs::get_links_from_file,
+        fs::get_all_links,
+        fs::suggest_links
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

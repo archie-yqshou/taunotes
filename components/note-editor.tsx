@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Eye, Edit3, FileText } from "lucide-react"
-import { readNote, writeNote, renameEntry } from "@/lib/tauri-api"
+import { readNote, writeNote, renameEntry, getLinksFromFile, type Link } from "@/lib/tauri-api"
 
 interface NoteEditorProps {
   selectedNote: string | null
@@ -12,6 +12,7 @@ interface NoteEditorProps {
   onNoteRenamed?: (oldPath: string, newPath: string) => void
   shouldStartEditing?: boolean
   onEditingStarted?: () => void
+  onLinkClick?: (notePath: string) => void
 }
 
 export function NoteEditor({
@@ -20,6 +21,7 @@ export function NoteEditor({
   onNoteRenamed,
   shouldStartEditing,
   onEditingStarted,
+  onLinkClick,
 }: NoteEditorProps) {
   const [content, setContent] = useState("")
   const [title, setTitle] = useState("")
@@ -27,6 +29,7 @@ export function NoteEditor({
   const [isLoading, setIsLoading] = useState(false)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [originalTitle, setOriginalTitle] = useState("")
+  const [links, setLinks] = useState<Link[]>([])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
 
@@ -49,10 +52,20 @@ export function NoteEditor({
       setTitle(fileName)
       setOriginalTitle(fileName)
       setHasUnsavedChanges(false)
+      
+      // Load links from the note
+      try {
+        const noteLinks = await getLinksFromFile(notePath)
+        setLinks(noteLinks)
+      } catch (linkError) {
+        console.warn("Failed to load links:", linkError)
+        setLinks([])
+      }
     } catch (error) {
       console.error("Failed to load note:", error)
       setContent("# Error\n\nFailed to load this note.")
       setTitle("Error")
+      setLinks([])
     } finally {
       setIsLoading(false)
     }
@@ -121,8 +134,14 @@ export function NoteEditor({
     }
   }, [shouldStartEditing, selectedNote, onEditingStarted])
 
+  const handleLinkClick = (targetNote: string) => {
+    // Convert note name to file path
+    const notePath = targetNote.endsWith('.md') ? targetNote : `${targetNote}.md`
+    onLinkClick?.(notePath)
+  }
+
   const renderMarkdown = (text: string) => {
-    const html = text
+    let html = text
       // Headers
       .replace(/^# (.*$)/gm, '<h1 class="text-3xl font-bold mb-4 text-foreground border-b border-border pb-2">$1</h1>')
       .replace(/^## (.*$)/gm, '<h2 class="text-2xl font-semibold mb-3 text-foreground">$1</h2>')
@@ -141,8 +160,16 @@ export function NoteEditor({
       // Lists
       .replace(/^- (.*$)/gm, '<li class="ml-4 text-foreground list-disc list-inside">$1</li>')
       .replace(/^\d+\. (.*$)/gm, '<li class="ml-4 text-foreground list-decimal list-inside">$1</li>')
-      // Links
+      // Standard markdown links
       .replace(/\[([^\]]+)\]$$([^)]+)$$/g, '<a href="$2" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
+      // Obsidian-style links [[Note Name]] or [[Note Name|Display Text]]
+      .replace(/\[\[([^\[\]]+)\]\]/g, (match, linkContent) => {
+        const [noteName, displayText] = linkContent.includes('|') 
+          ? linkContent.split('|', 2)
+          : [linkContent, linkContent]
+        
+        return `<span class="inline-block cursor-pointer px-1 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors" data-note-link="${noteName.trim()}">${displayText.trim()}</span>`
+      })
       // Horizontal rules
       .replace(/^---$/gm, '<hr class="my-6 border-border">')
       // Line breaks
@@ -272,7 +299,19 @@ export function NoteEditor({
 
       <div className="flex-1 overflow-hidden">
         {viewMode === "preview" ? (
-          <div className="h-full overflow-y-auto p-8">
+          <div 
+            className="h-full overflow-y-auto p-8"
+            onClick={(e) => {
+              const target = e.target as HTMLElement
+              const linkSpan = target.closest('[data-note-link]')
+              if (linkSpan) {
+                const noteName = linkSpan.getAttribute('data-note-link')
+                if (noteName) {
+                  handleLinkClick(noteName)
+                }
+              }
+            }}
+          >
             <div
               className="prose prose-lg max-w-none text-foreground"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
@@ -292,7 +331,20 @@ export function NoteEditor({
               </div>
             </div>
             <div className="w-1/2">
-              <div className="h-full overflow-y-auto p-6" ref={previewRef}>
+              <div 
+                className="h-full overflow-y-auto p-6" 
+                ref={previewRef}
+                onClick={(e) => {
+                  const target = e.target as HTMLElement
+                  const linkSpan = target.closest('[data-note-link]')
+                  if (linkSpan) {
+                    const noteName = linkSpan.getAttribute('data-note-link')
+                    if (noteName) {
+                      handleLinkClick(noteName)
+                    }
+                  }
+                }}
+              >
                 <div
                   className="prose prose-lg max-w-none text-foreground"
                   dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
