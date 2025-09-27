@@ -253,6 +253,13 @@ export function EnhancedSidebar({
 
   const handleDragStart = (e: React.DragEvent, filePath: string) => {
     e.stopPropagation()
+
+    if (draggedItem === filePath) {
+      console.log("[v0] Drag already in progress for:", filePath)
+      e.preventDefault()
+      return
+    }
+
     console.log("[v0] Drag start:", filePath)
     e.dataTransfer.effectAllowed = "move"
     e.dataTransfer.setData("text/plain", filePath)
@@ -563,7 +570,7 @@ export function EnhancedSidebar({
                   {recentNotes.map((note) => (
                     <div
                       key={`recent-${note.path}`}
-                      draggable
+                      draggable={draggedItem !== note.path}
                       onDragStart={(e) => handleDragStart(e, note.path)}
                       onDragEnd={handleDragEnd}
                       onClick={() => onSelectNote(note.path)}
@@ -611,7 +618,7 @@ export function EnhancedSidebar({
                     {filteredEntries.map((entry) => (
                       <div
                         key={entry.path}
-                        draggable
+                        draggable={draggedItem !== entry.path}
                         onDragStart={(e) => handleDragStart(e, entry.path)}
                         onDragEnd={handleDragEnd}
                         onClick={() => {
