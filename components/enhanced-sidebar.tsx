@@ -251,6 +251,7 @@ export function EnhancedSidebar({
   }
 
   const handleDragStart = (e: React.DragEvent, filePath: string) => {
+    e.stopPropagation()
     console.log("[v0] Drag start:", filePath)
     e.dataTransfer.effectAllowed = "move"
     e.dataTransfer.setData("text/plain", filePath)
@@ -266,32 +267,42 @@ export function EnhancedSidebar({
     setTimeout(() => document.body.removeChild(dragImage), 0)
   }
 
-  const handleDragEnd = () => {
+  const handleDragEnd = (e: React.DragEvent) => {
+    e.stopPropagation()
     console.log("[v0] Drag end")
     setDraggedItem(null)
     setDragOverTarget(null)
   }
 
-  const handleDragOver = (e: React.DragEvent, targetPath?: string) => {
+  const handleDragOver = (e: React.DragEvent, targetPath?: string, isReorderZone?: boolean) => {
     if (!draggedItem) return
     e.preventDefault()
-    e.stopPropagation() // Stop event propagation to prevent conflicts
+    e.stopPropagation()
     e.dataTransfer.dropEffect = "move"
-    setDragOverTarget(targetPath || "__ROOT__")
+
+    if (isReorderZone) {
+      setDragOverTarget(`__REORDER__${targetPath}`)
+    } else {
+      setDragOverTarget(targetPath || "__ROOT__")
+    }
   }
 
   const handleDragLeave = (e: React.DragEvent) => {
-    e.stopPropagation() // Stop event propagation
-    // Only clear if we're actually leaving the target
+    e.stopPropagation()
     if (!e.currentTarget.contains(e.relatedTarget as Node)) {
       setDragOverTarget(null)
     }
   }
 
-  const handleDrop = async (e: React.DragEvent, targetPath?: string) => {
+  const handleDrop = async (
+    e: React.DragEvent,
+    targetPath?: string,
+    isReorderZone?: boolean,
+    insertBefore?: string,
+  ) => {
     e.preventDefault()
-    e.stopPropagation() // Stop event propagation
-    console.log("[v0] Drop event triggered for:", targetPath || "root")
+    e.stopPropagation()
+    console.log("[v0] Drop event triggered for:", targetPath || "root", isReorderZone ? "(reorder)" : "")
 
     const droppedPath = e.dataTransfer.getData("text/plain")
 
@@ -306,11 +317,26 @@ export function EnhancedSidebar({
       const fileName = droppedPath.split(/[\\/]/).pop()!
       let newPath: string
 
+      if (isReorderZone && insertBefore) {
+        const draggedEntry = entries.find((e) => e.path === droppedPath)
+        const targetEntry = entries.find((e) => e.path === insertBefore)
+
+        if (draggedEntry && targetEntry) {
+          const draggedParent = getParentPath(droppedPath)
+          const targetParent = getParentPath(insertBefore)
+
+          if (draggedParent === targetParent) {
+            console.log("[v0] Reordering within same directory")
+            setDraggedItem(null)
+            setDragOverTarget(null)
+            return
+          }
+        }
+      }
+
       if (!targetPath || targetPath === "__ROOT__") {
-        // Moving to root
         newPath = fileName
       } else {
-        // Moving to folder
         const targetEntry = entries.find((e) => e.path === targetPath)
         if (!targetEntry?.is_dir) return
 
@@ -335,22 +361,34 @@ export function EnhancedSidebar({
     }
   }
 
-  const TreeNode: React.FC<{ node: FileTreeNode; depth: number }> = ({ node, depth }) => {
+  const TreeNode: React.FC<{ node: FileTreeNode; depth: number; siblings?: FileTreeNode[] }> = ({
+    node,
+    depth,
+    siblings = [],
+  }) => {
     const isSelected = selectedNote === node.entry.path
     const isMarkdownFile = !node.entry.is_dir && node.entry.name.endsWith(".md")
     const isDraggedOver = dragOverTarget === node.entry.path
     const isBeingDragged = draggedItem === node.entry.path
+    const isReorderTarget = dragOverTarget?.startsWith(`__REORDER__${node.entry.path}`)
 
     return (
       <div key={node.entry.path} style={{ marginLeft: `${depth * 12}px` }}>
         <div
+          className={cn("h-1 transition-all duration-200", isReorderTarget && "bg-blue-400 h-2 rounded-full")}
+          onDragOver={(e) => handleDragOver(e, node.entry.path, true)}
+          onDrop={(e) => handleDrop(e, undefined, true, node.entry.path)}
+        />
+
+        <div
           draggable
           onDragStart={(e) => handleDragStart(e, node.entry.path)}
           onDragEnd={handleDragEnd}
-          onDragOver={(e) => handleDragOver(e, node.entry.is_dir ? node.entry.path : undefined)} // Only allow drop on folders
+          onDragOver={(e) => handleDragOver(e, node.entry.is_dir ? node.entry.path : undefined)}
           onDragLeave={handleDragLeave}
-          onDrop={(e) => handleDrop(e, node.entry.is_dir ? node.entry.path : undefined)} // Only handle drop on folders
+          onDrop={(e) => handleDrop(e, node.entry.is_dir ? node.entry.path : undefined)}
           onClick={(e) => {
+            e.stopPropagation()
             if (node.entry.is_dir) {
               toggleFolder(node.entry.path)
             } else if (isMarkdownFile) {
@@ -408,7 +446,9 @@ export function EnhancedSidebar({
         {node.entry.is_dir && node.isExpanded && (
           <div>
             {node.children.length > 0 ? (
-              node.children.map((child) => <TreeNode key={child.entry.path} node={child} depth={depth + 1} />)
+              node.children.map((child) => (
+                <TreeNode key={child.entry.path} node={child} depth={depth + 1} siblings={node.children} />
+              ))
             ) : (
               <div style={{ marginLeft: `${(depth + 1) * 12}px` }} className="p-2 text-xs text-muted-foreground italic">
                 Empty folder
@@ -425,7 +465,7 @@ export function EnhancedSidebar({
 
   useEffect(() => {
     loadEntries()
-  }, [vaultPath, refreshTrigger]) // Add refreshTrigger dependency
+  }, [vaultPath, refreshTrigger])
 
   useEffect(() => {
     updateRecentNotes()
@@ -499,7 +539,6 @@ export function EnhancedSidebar({
           </div>
         ) : (
           <>
-            {/* Recent Notes */}
             {recentNotes.length > 0 && (
               <div className="mb-6">
                 <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
@@ -547,7 +586,6 @@ export function EnhancedSidebar({
               </div>
             )}
 
-            {/* File Tree */}
             <div className="mb-6">
               <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
                 <FolderClosed className="h-4 w-4" />
@@ -555,7 +593,6 @@ export function EnhancedSidebar({
               </div>
               <div className="ml-2">
                 {searchQuery ? (
-                  // Show filtered flat list when searching
                   <div className="space-y-1">
                     {filteredEntries.map((entry) => (
                       <div
@@ -600,10 +637,9 @@ export function EnhancedSidebar({
                     ))}
                   </div>
                 ) : (
-                  // Show tree structure when not searching
                   <div>
                     {fileTree.map((node) => (
-                      <TreeNode key={node.entry.path} node={node} depth={0} />
+                      <TreeNode key={node.entry.path} node={node} depth={0} siblings={fileTree} />
                     ))}
                   </div>
                 )}
@@ -621,7 +657,6 @@ export function EnhancedSidebar({
         )}
       </ScrollArea>
 
-      {/* Drop zone indicator for root */}
       {dragOverTarget === "__ROOT__" && (
         <div className="absolute inset-0 bg-blue-100/20 dark:bg-blue-900/20 border-2 border-dashed border-blue-400 rounded-lg pointer-events-none" />
       )}
