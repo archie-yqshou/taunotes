@@ -126,30 +126,11 @@
   }
 }
 
-/* Custom drag and drop styles */
-.drag-active .drop-zone {
-  cursor: copy !important;
-}
-
-.drag-active .drop-zone:hover {
-  cursor: copy !important;
-}
-
-/* Ensure folder icons show proper cursor during drag */
-.drag-active [data-folder="true"] {
-  cursor: copy !important;
-}
-
-/* Global drag state */
-body.dragging {
+/* Simplified drag styles - removed complex cursor management */
+.drag-active {
   cursor: grabbing !important;
 }
 
-body.dragging * {
+.drag-active * {
   cursor: grabbing !important;
-}
-
-body.dragging .drop-zone,
-body.dragging .drop-zone * {
-  cursor: copy !important;
 }
