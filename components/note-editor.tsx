@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Eye, Edit3 } from "lucide-react"
+import { Eye, Edit3, FileText } from "lucide-react"
 import { readNote, writeNote, renameEntry } from "@/lib/tauri-api"
 
 interface NoteEditorProps {
@@ -154,18 +154,65 @@ export function NoteEditor({
   if (!selectedNote) {
     return (
       <div className="flex-1 flex items-center justify-center bg-background">
-        <div className="text-center max-w-md">
-          <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-muted flex items-center justify-center">
-            <Edit3 className="h-12 w-12 text-muted-foreground" />
+        <div className="text-center max-w-2xl px-8">
+          <div className="w-32 h-32 mx-auto mb-8 rounded-2xl bg-gradient-to-br from-blue-500/10 to-purple-500/10 flex items-center justify-center border border-border/50">
+            <FileText className="h-16 w-16 text-blue-500" />
           </div>
-          <h2 className="text-2xl font-semibold mb-2 text-foreground">Welcome to Tau</h2>
-          <p className="text-muted-foreground mb-6">
-            Select a note from the sidebar to start reading, or create a new note to begin writing.
+          <h1 className="text-4xl font-bold mb-4 text-foreground">Welcome to Tau</h1>
+          <p className="text-xl text-muted-foreground mb-8 leading-relaxed">
+            Your clean, distraction-free note-taking companion inspired by Obsidian.
           </p>
-          <div className="text-sm text-muted-foreground space-y-1">
-            <p>✨ Clean, distraction-free writing</p>
-            <p>📝 Live markdown preview</p>
-            <p>🎨 Beautiful themes</p>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div className="p-6 rounded-xl bg-card border border-border/50 hover:border-border transition-colors">
+              <div className="w-12 h-12 rounded-lg bg-blue-500/10 flex items-center justify-center mb-4 mx-auto">
+                <Edit3 className="h-6 w-6 text-blue-500" />
+              </div>
+              <h3 className="font-semibold mb-2 text-foreground">Live Preview</h3>
+              <p className="text-sm text-muted-foreground">
+                See your markdown rendered in real-time as you type, just like Obsidian.
+              </p>
+            </div>
+
+            <div className="p-6 rounded-xl bg-card border border-border/50 hover:border-border transition-colors">
+              <div className="w-12 h-12 rounded-lg bg-green-500/10 flex items-center justify-center mb-4 mx-auto">
+                {/* Placeholder for FolderClosed icon */}
+              </div>
+              <h3 className="font-semibold mb-2 text-foreground">Organized</h3>
+              <p className="text-sm text-muted-foreground">
+                Drag and drop files and folders to keep your notes perfectly organized.
+              </p>
+            </div>
+
+            <div className="p-6 rounded-xl bg-card border border-border/50 hover:border-border transition-colors">
+              <div className="w-12 h-12 rounded-lg bg-purple-500/10 flex items-center justify-center mb-4 mx-auto">
+                <Eye className="h-6 w-6 text-purple-500" />
+              </div>
+              <h3 className="font-semibold mb-2 text-foreground">Clean Design</h3>
+              <p className="text-sm text-muted-foreground">
+                Minimal, beautiful interface that lets you focus on your thoughts.
+              </p>
+            </div>
+          </div>
+
+          <div className="text-center">
+            <p className="text-muted-foreground mb-4">
+              Get started by selecting a note from the sidebar or creating a new one.
+            </p>
+            <div className="flex items-center justify-center gap-4 text-sm text-muted-foreground">
+              <span className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                Auto-save enabled
+              </span>
+              <span className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                Markdown support
+              </span>
+              <span className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-purple-500"></div>
+                Theme customization
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -174,7 +221,7 @@ export function NoteEditor({
 
   return (
     <div className="flex-1 flex flex-col bg-background">
-      <div className="flex items-center justify-between p-4 border-b border-border bg-card/30">
+      <div className="flex items-center justify-between p-4 border-b border-border bg-card/30 backdrop-blur-sm">
         <div className="flex items-center gap-3">
           <input
             type="text"
@@ -186,10 +233,14 @@ export function NoteEditor({
             placeholder="Untitled"
           />
           {hasUnsavedChanges && (
-            <span className="text-xs text-orange-500 bg-orange-100 dark:bg-orange-900 px-2 py-1 rounded">Unsaved</span>
+            <span className="text-xs text-orange-500 bg-orange-100 dark:bg-orange-900/30 px-2 py-1 rounded-full">
+              Unsaved
+            </span>
           )}
           {isLoading && (
-            <span className="text-xs text-blue-500 bg-blue-100 dark:bg-blue-900 px-2 py-1 rounded">Loading...</span>
+            <span className="text-xs text-blue-500 bg-blue-100 dark:bg-blue-900/30 px-2 py-1 rounded-full">
+              Loading...
+            </span>
           )}
         </div>
         <div className="flex items-center gap-2">

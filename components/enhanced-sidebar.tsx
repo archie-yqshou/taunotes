@@ -3,20 +3,6 @@
 import type React from "react"
 import { useState, useEffect } from "react"
 import {
-  DndContext,
-  type DragEndEvent,
-  closestCenter,
-  useSensor,
-  useSensors,
-  PointerSensor,
-  useDraggable,
-  useDroppable,
-  pointerWithin,
-  rectIntersection,
-  type CollisionDetection,
-} from "@dnd-kit/core"
-import { SortableContext, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable"
-import {
   Search,
   Plus,
   FileText,
@@ -33,16 +19,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import {
-  listEntries,
-  createNote,
-  createFolder,
-  deleteEntry,
-  renameEntry,
-  readNote,
-  writeNote,
-  type Entry,
-} from "@/lib/tauri-api"
+import { listEntries, createNote, createFolder, deleteEntry, renameEntry, type Entry } from "@/lib/tauri-api"
 import { cn } from "@/lib/utils"
 
 interface EnhancedSidebarProps {
@@ -77,95 +54,15 @@ export function EnhancedSidebar({
   const [isLoading, setIsLoading] = useState(false)
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([])
   const [draggedItem, setDraggedItem] = useState<string | null>(null)
-  const [dragOverFolder, setDragOverFolder] = useState<string | null>(null)
+  const [dragOverTarget, setDragOverTarget] = useState<string | null>(null)
   const [recentNotes, setRecentNotes] = useState<Entry[]>([])
-  const [isDragging, setIsDragging] = useState(false)
-  const [activeId, setActiveId] = useState<string | null>(null)
   const [expandedPaths, setExpandedPaths] = useState<string[]>([])
-  const [orderMap, setOrderMap] = useState<Record<string, string[]>>({})
-  const [dropIndicator, setDropIndicator] = useState<null | {
-    targetId: string
-    position: "before" | "after" | "inside"
-  }>(null)
-
-  // Root droppables to allow moving items to vault root (entire sidebar + top/bottom spacers)
-  const { setNodeRef: setRootDropRef } = useDroppable({ id: "__ROOT__" })
-  const { setNodeRef: setRootTopRef } = useDroppable({ id: "__ROOT_TOP__" })
-  const { setNodeRef: setRootBottomRef } = useDroppable({ id: "__ROOT_BOTTOM__" })
 
   const getParentPath = (p: string): string => {
     const sep = p.includes("\\") ? "\\" : "/"
     const idx = p.lastIndexOf(sep)
     return idx === -1 ? "" : p.substring(0, idx)
   }
-
-  const loadOrder = async (folderPath: string) => {
-    const orderFile = folderPath
-      ? `${folderPath}${folderPath.includes("\\") ? "\\" : "/"}.tau_order.json`
-      : `.tau_order.json`
-    try {
-      const content = await readNote(orderFile)
-      const names: string[] = JSON.parse(content)
-      setOrderMap((prev) => ({ ...prev, [folderPath]: names }))
-      return names
-    } catch {
-      // ignore if not found
-      return [] as string[]
-    }
-  }
-
-  const saveOrder = async (folderPath: string, names: string[]) => {
-    const orderFile = folderPath
-      ? `${folderPath}${folderPath.includes("\\") ? "\\" : "/"}.tau_order.json`
-      : `.tau_order.json`
-    try {
-      await writeNote(orderFile, JSON.stringify(names))
-      setOrderMap((prev) => ({ ...prev, [folderPath]: names }))
-    } catch (e) {
-      console.error("Failed to save order:", e)
-    }
-  }
-
-  // dnd-kit sensors
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 3 } }))
-
-  // Prefer specific folder droppables; fall back to root only when no folder under pointer
-  const preferNonRootCollision: CollisionDetection = (args) => {
-    let collisions = pointerWithin(args)
-    if (!collisions.length) collisions = rectIntersection(args)
-    if (!collisions.length) collisions = closestCenter(args)
-    const nonRoot = collisions.filter((c) => c.id !== "__ROOT__")
-    return nonRoot.length ? nonRoot : collisions
-  }
-
-  // Load entries from vault
-  useEffect(() => {
-    loadEntries()
-  }, [vaultPath, refreshTrigger]) // Add refreshTrigger dependency
-
-  // Update recent notes when entries change
-  useEffect(() => {
-    updateRecentNotes()
-  }, [entries, selectedNote])
-
-  // Add global drag event listeners for debugging
-  useEffect(() => {
-    const handleGlobalDragOver = (e: DragEvent) => {
-      console.log("🌍 GLOBAL drag over - target:", e.target, "isDragging:", isDragging)
-    }
-
-    const handleGlobalDrop = (e: DragEvent) => {
-      console.log("🌍 GLOBAL drop - target:", e.target)
-    }
-
-    document.addEventListener("dragover", handleGlobalDragOver)
-    document.addEventListener("drop", handleGlobalDrop)
-
-    return () => {
-      document.removeEventListener("dragover", handleGlobalDragOver)
-      document.removeEventListener("drop", handleGlobalDrop)
-    }
-  }, [isDragging])
 
   const loadEntries = async () => {
     try {
@@ -264,17 +161,6 @@ export function EnhancedSidebar({
         children: [],
         isExpanded: expandedPaths.includes(entry.path),
       }))
-      // Sort children: apply saved order first, then folders first, then alpha
-      const saved = orderMap[folderPath] || (await loadOrder(folderPath))
-      const nameToIndex = new Map(saved.map((n, i) => [n, i]))
-      childNodes.sort((a, b) => {
-        const ai = nameToIndex.has(a.entry.name) ? (nameToIndex.get(a.entry.name) as number) : Number.MAX_SAFE_INTEGER
-        const bi = nameToIndex.has(b.entry.name) ? (nameToIndex.get(b.entry.name) as number) : Number.MAX_SAFE_INTEGER
-        if (ai !== bi) return ai - bi
-        if (a.entry.is_dir && !b.entry.is_dir) return -1
-        if (!a.entry.is_dir && b.entry.is_dir) return 1
-        return a.entry.name.localeCompare(b.entry.name)
-      })
       setFileTree((prev) => replaceChildrenForPath(prev, folderPath, childNodes))
     } catch (error) {
       console.error("Failed to load folder children:", error)
@@ -365,47 +251,68 @@ export function EnhancedSidebar({
   }
 
   const handleDragStart = (e: React.DragEvent, filePath: string) => {
-    console.log("🚀 Drag start:", filePath)
+    console.log("[v0] Drag start:", filePath)
     e.dataTransfer.effectAllowed = "move"
     e.dataTransfer.setData("text/plain", filePath)
     setDraggedItem(filePath)
-    setIsDragging(true) // Set isDragging to true
-    document.body.classList.add("dragging") // Add class for global styling
+
+    // Add visual feedback
+    const dragImage = document.createElement("div")
+    dragImage.textContent = filePath.split(/[\\/]/).pop() || filePath
+    dragImage.style.cssText =
+      "position: absolute; top: -1000px; background: var(--sidebar-accent); padding: 8px; border-radius: 4px; font-size: 12px;"
+    document.body.appendChild(dragImage)
+    e.dataTransfer.setDragImage(dragImage, 0, 0)
+    setTimeout(() => document.body.removeChild(dragImage), 0)
   }
 
   const handleDragEnd = () => {
-    console.log("🏁 Drag end")
+    console.log("[v0] Drag end")
     setDraggedItem(null)
-    setDragOverFolder(null)
-    setIsDragging(false) // Set isDragging to false
-    document.body.classList.remove("dragging") // Remove class
+    setDragOverTarget(null)
   }
 
-  const handleDragOver = (e: React.DragEvent, folderPath: string) => {
+  const handleDragOver = (e: React.DragEvent, targetPath?: string) => {
     if (!draggedItem) return
     e.preventDefault()
     e.dataTransfer.dropEffect = "move"
-    setDragOverFolder(folderPath)
+    setDragOverTarget(targetPath || "__ROOT__")
   }
 
   const handleDragLeave = (e: React.DragEvent) => {
-    // Only clear drag over if we're actually leaving the element
+    // Only clear if we're actually leaving the target
     if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-      setDragOverFolder(null)
+      setDragOverTarget(null)
     }
   }
 
-  const handleDrop = async (e: React.DragEvent, targetFolderPath: string) => {
+  const handleDrop = async (e: React.DragEvent, targetPath?: string) => {
     e.preventDefault()
     const droppedPath = e.dataTransfer.getData("text/plain")
 
-    if (!droppedPath || droppedPath === targetFolderPath) return
+    if (!droppedPath || droppedPath === targetPath) {
+      setDraggedItem(null)
+      setDragOverTarget(null)
+      return
+    }
 
     try {
       const fileName = droppedPath.split(/[\\/]/).pop()!
-      const separator = targetFolderPath.includes("\\") ? "\\" : "/"
-      const newPath = targetFolderPath + separator + fileName
+      let newPath: string
 
+      if (!targetPath || targetPath === "__ROOT__") {
+        // Moving to root
+        newPath = fileName
+      } else {
+        // Moving to folder
+        const targetEntry = entries.find((e) => e.path === targetPath)
+        if (!targetEntry?.is_dir) return
+
+        const separator = targetPath.includes("\\") ? "\\" : "/"
+        newPath = targetPath + separator + fileName
+      }
+
+      console.log("[v0] Moving file from", droppedPath, "to", newPath)
       await renameEntry(droppedPath, newPath)
       await loadEntries()
 
@@ -418,34 +325,26 @@ export function EnhancedSidebar({
       alert(`Failed to move file: ${error}`)
     } finally {
       setDraggedItem(null)
-      setDragOverFolder(null)
+      setDragOverTarget(null)
     }
   }
 
   const TreeNode: React.FC<{ node: FileTreeNode; depth: number }> = ({ node, depth }) => {
     const isSelected = selectedNote === node.entry.path
     const isMarkdownFile = !node.entry.is_dir && node.entry.name.endsWith(".md")
-    // Make every node draggable AND droppable (needed for before/after indicators)
-    const { attributes, listeners, setNodeRef: setDragRef } = useDraggable({ id: node.entry.path })
-    const { setNodeRef: setDropRef, isOver } = useDroppable({ id: node.entry.path, disabled: false })
-
-    const setRefs = (el: HTMLElement | null) => {
-      setDragRef(el)
-      if (node.entry.is_dir) setDropRef(el)
-    }
+    const isDraggedOver = dragOverTarget === node.entry.path
+    const isBeingDragged = draggedItem === node.entry.path
 
     return (
       <div key={node.entry.path} style={{ marginLeft: `${depth * 12}px` }}>
         <div
-          ref={setRefs}
-          {...attributes}
-          {...listeners}
+          draggable
+          onDragStart={(e) => handleDragStart(e, node.entry.path)}
+          onDragEnd={handleDragEnd}
+          onDragOver={(e) => (node.entry.is_dir ? handleDragOver(e, node.entry.path) : e.preventDefault())}
+          onDragLeave={handleDragLeave}
+          onDrop={(e) => (node.entry.is_dir ? handleDrop(e, node.entry.path) : undefined)}
           onClick={(e) => {
-            if (isDragging) {
-              // Prevent click if dragging
-              e.preventDefault()
-              return
-            }
             if (node.entry.is_dir) {
               toggleFolder(node.entry.path)
             } else if (isMarkdownFile) {
@@ -453,33 +352,13 @@ export function EnhancedSidebar({
             }
           }}
           className={cn(
-            "group relative flex items-center justify-between p-2 rounded-md transition-colors select-none",
-            "cursor-grab active:cursor-grabbing",
-            isSelected
-              ? "bg-sidebar-accent text-sidebar-accent-foreground"
-              : "hover:bg-sidebar-accent/50 text-sidebar-foreground",
-            dropIndicator &&
-              dropIndicator.targetId === node.entry.path &&
-              dropIndicator.position === "inside" &&
-              node.entry.is_dir &&
-              "bg-blue-200 dark:bg-blue-800/50 border-2 border-dashed border-blue-400",
+            "group relative flex items-center justify-between p-2 rounded-md transition-all duration-200 select-none cursor-pointer",
+            isSelected && "bg-sidebar-accent text-sidebar-accent-foreground",
+            !isSelected && "hover:bg-sidebar-accent/50 text-sidebar-foreground",
+            isBeingDragged && "opacity-50 scale-95",
+            isDraggedOver && node.entry.is_dir && "bg-blue-100 dark:bg-blue-900/30 ring-2 ring-blue-400 ring-inset",
           )}
         >
-          {/* Drop indicator line for before/after positions */}
-          {dropIndicator && dropIndicator.targetId === node.entry.path && dropIndicator.position !== "inside" && (
-            <div
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                height: 2,
-                background: "var(--foreground)",
-                opacity: 0.3,
-                top: dropIndicator.position === "before" ? 0 : undefined,
-                bottom: dropIndicator.position === "after" ? 0 : undefined,
-              }}
-            />
-          )}
           <div className="flex items-center gap-1 flex-1 min-w-0">
             {node.entry.is_dir ? (
               <>
@@ -489,9 +368,9 @@ export function EnhancedSidebar({
                   <ChevronRight className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
                 )}
                 {node.isExpanded ? (
-                  <FolderOpen className="h-4 w-4 flex-shrink-0 text-blue-500" data-folder="true" />
+                  <FolderOpen className="h-4 w-4 flex-shrink-0 text-blue-500" />
                 ) : (
-                  <FolderClosed className="h-4 w-4 flex-shrink-0 text-blue-500" data-folder="true" />
+                  <FolderClosed className="h-4 w-4 flex-shrink-0 text-blue-500" />
                 )}
               </>
             ) : (
@@ -521,20 +400,15 @@ export function EnhancedSidebar({
         </div>
 
         {node.entry.is_dir && node.isExpanded && (
-          <SortableContext items={node.children.map((c) => c.entry.path)} strategy={verticalListSortingStrategy}>
-            <div>
-              {node.children.length > 0 ? (
-                node.children.map((child) => <TreeNode key={child.entry.path} node={child} depth={depth + 1} />)
-              ) : (
-                <div
-                  style={{ marginLeft: `${(depth + 1) * 12}px` }}
-                  className="p-2 text-xs text-muted-foreground italic"
-                >
-                  Empty folder
-                </div>
-              )}
-            </div>
-          </SortableContext>
+          <div>
+            {node.children.length > 0 ? (
+              node.children.map((child) => <TreeNode key={child.entry.path} node={child} depth={depth + 1} />)
+            ) : (
+              <div style={{ marginLeft: `${(depth + 1) * 12}px` }} className="p-2 text-xs text-muted-foreground italic">
+                Empty folder
+              </div>
+            )}
+          </div>
         )}
       </div>
     )
@@ -542,6 +416,14 @@ export function EnhancedSidebar({
 
   // Filter entries based on search
   const filteredEntries = entries.filter((entry) => entry.name.toLowerCase().includes(searchQuery.toLowerCase()))
+
+  useEffect(() => {
+    loadEntries()
+  }, [vaultPath, refreshTrigger]) // Add refreshTrigger dependency
+
+  useEffect(() => {
+    updateRecentNotes()
+  }, [entries, selectedNote])
 
   if (collapsed) {
     return (
@@ -560,264 +442,149 @@ export function EnhancedSidebar({
   }
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={preferNonRootCollision}
-      onDragStart={(e) => {
-        const id = (e.active?.id as string) || null
-        setActiveId(id)
-        setIsDragging(true)
-      }}
-      onDragOver={(e) => {
-        if (!e.over) {
-          setDropIndicator(null)
-          return
-        }
-        const overId = e.over.id as string | undefined
-        if (!overId) {
-          setDropIndicator(null)
-          return
-        }
-        if (overId === "__ROOT__" || overId === "__ROOT_TOP__") {
-          setDropIndicator({ targetId: "__ROOT__", position: "before" })
-          return
-        }
-        if (overId === "__ROOT_BOTTOM__") {
-          setDropIndicator({ targetId: "__ROOT__", position: "after" })
-          return
-        }
-        const overNode = findNodeByPath(fileTree, overId)
-        if (!overNode) {
-          setDropIndicator(null)
-          return
-        }
-        const overRect = e.over.rect
-        const activeRect = e.active.rect.current.translated || e.active.rect.current.initial
-        const activeCenterY = (activeRect?.top || 0) + (activeRect?.height || 0) / 2
-        const top = overRect.top
-        const bottom = overRect.bottom
-        const height = overRect.height
-        if (overNode.entry.is_dir) {
-          // Only show before/after when near edges; default to inside when centered
-          const edge = Math.max(8, height * 0.15)
-          const beforeThreshold = top + edge
-          const afterThreshold = bottom - edge
-          if (activeCenterY < beforeThreshold) {
-            setDropIndicator({ targetId: overId, position: "before" })
-          } else if (activeCenterY > afterThreshold) {
-            setDropIndicator({ targetId: overId, position: "after" })
-          } else {
-            setDropIndicator({ targetId: overId, position: "inside" })
-          }
-        } else {
-          const mid = top + height / 2
-          setDropIndicator({ targetId: overId, position: activeCenterY < mid ? "before" : "after" })
-        }
-      }}
-      onDragEnd={async (e: DragEndEvent) => {
-        setIsDragging(false)
-        const sourcePath = e.active?.id as string
-        const overId = e.over?.id as string | undefined
-        setActiveId(null)
-        if (!sourcePath || !overId) {
-          setDropIndicator(null)
-          return
-        }
-
-        // Intra-folder reordering (same parent)
-        const sourceParent = getParentPath(sourcePath)
-        let overParent = ""
-        if (overId === "__ROOT__" || overId === "__ROOT_TOP__" || overId === "__ROOT_BOTTOM__") {
-          overParent = ""
-        } else {
-          const overNode = findNodeByPath(fileTree, overId)
-          overParent = overNode?.entry.is_dir && dropIndicator?.position === "inside" ? overId : getParentPath(overId)
-        }
-        // Prevent moving folder into its own descendant
-        if (
-          overParent &&
-          (overParent === sourcePath || overParent.startsWith(sourcePath + (sourcePath.includes("\\") ? "\\" : "/")))
-        ) {
-          setDropIndicator(null)
-          return
-        }
-
-        if (
-          overParent === sourceParent &&
-          overId !== "__ROOT__" &&
-          overId !== "__ROOT_TOP__" &&
-          overId !== "__ROOT_BOTTOM__" &&
-          dropIndicator &&
-          dropIndicator.position !== "inside"
-        ) {
-          const containerNodes = (overParent ? findNodeByPath(fileTree, overParent)?.children : fileTree) || []
-          const order = containerNodes.map((n) => n.entry.name)
-          const sourceName = sourcePath.split(/[\\/]/).pop()!
-          const targetName = findNodeByPath(fileTree, overId)?.entry.name || ""
-          const from = order.indexOf(sourceName)
-          const toBase = order.indexOf(targetName)
-          if (from !== -1 && toBase !== -1) {
-            const to = dropIndicator.position === "before" ? toBase : toBase + 1
-            const newOrder = arrayMove(order, from, to > from ? to - 1 : to)
-            await saveOrder(overParent, newOrder)
-            await loadEntries()
-            setDropIndicator(null)
-            return
-          }
-        }
-        // Allow dropping onto folders or root
-        if (overId !== "__ROOT__") {
-          const targetNode = fileTree && findNodeByPath(fileTree, overId)
-          if (!targetNode || !targetNode.entry.is_dir) return
-          // Prevent moving a folder into its own descendant
-          const sep = overId.includes("\\") ? "\\" : "/"
-          if (sourcePath === overId || overId.startsWith(sourcePath + sep)) {
-            return
-          }
-        }
-        try {
-          const fileName = sourcePath.split(/[\\/]/).pop()!
-          const newParent = overParent // resolved above (root, folder for inside, or parent of target for before/after)
-          const newPath = newParent ? newParent + (newParent.includes("\\") ? "\\" : "/") + fileName : fileName
-          await renameEntry(sourcePath, newPath)
-          // Reload but keep expanded folders
-          await loadEntries()
-          if (selectedNote === sourcePath) {
-            onSelectNote(newPath)
-            onNoteRenamed?.(sourcePath, newPath)
-          }
-        } catch (error) {
-          console.error("Failed to move via dnd-kit:", error)
-          alert(`Failed to move file: ${error}`)
-        }
-        setDropIndicator(null)
-      }}
-      onDragCancel={() => {
-        setIsDragging(false)
-        setActiveId(null)
-      }}
+    <aside
+      className="fixed left-0 top-0 h-full w-64 bg-sidebar border-r border-sidebar-border z-50 flex flex-col"
+      onDragOver={(e) => handleDragOver(e)}
+      onDrop={(e) => handleDrop(e)}
     >
-      <aside
-        className={cn(
-          "fixed left-0 top-0 h-full w-64 bg-sidebar border-r border-sidebar-border z-50 flex flex-col",
-          isDragging && "drag-active",
-        )}
-        style={
-          {
-            // Add custom CSS for drag states
-            "--drag-cursor": isDragging ? "grabbing" : "default",
-          } as React.CSSProperties
-        }
-        onDragOverCapture={(e) => {
-          // Make the entire sidebar a permissive drop zone during in-app drags
-          if (isDragging) {
-            e.preventDefault()
-            try {
-              ;(e as unknown as DragEvent).dataTransfer!.dropEffect = "move"
-            } catch {}
-          }
-        }}
-        ref={setRootDropRef}
-      >
-        <div className="p-4 border-b border-sidebar-border">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-sidebar-foreground">Tau Notes</h2>
-            <div className="flex items-center gap-1">
-              <Button variant="ghost" size="icon" onClick={onShowSettings} className="hover:bg-sidebar-accent">
-                <Settings className="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="icon" onClick={onToggle} className="hover:bg-sidebar-accent">
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-
-          <div className="relative mb-3">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search notes..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 bg-sidebar-accent border-sidebar-border focus:ring-sidebar-ring"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Button
-              onClick={createNewNote}
-              className="w-full bg-sidebar-primary hover:bg-sidebar-primary/90 text-sidebar-primary-foreground"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              New Note
+      <div className="p-4 border-b border-sidebar-border">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-sidebar-foreground">Tau Notes</h2>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="icon" onClick={onShowSettings} className="hover:bg-sidebar-accent">
+              <Settings className="h-4 w-4" />
             </Button>
-            <Button onClick={createNewFolder} variant="outline" className="w-full bg-transparent">
-              <FolderClosed className="h-4 w-4 mr-2" />
-              New Folder
+            <Button variant="ghost" size="icon" onClick={onToggle} className="hover:bg-sidebar-accent">
+              <X className="h-4 w-4" />
             </Button>
           </div>
         </div>
 
-        <ScrollArea
-          className="flex-1 p-2"
-          onDragOverCapture={(e) => {
-            if (isDragging) {
-              e.preventDefault()
-              try {
-                ;(e as unknown as DragEvent).dataTransfer!.dropEffect = "move"
-              } catch {}
-            }
-          }}
-        >
-          {isLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="text-sm text-muted-foreground">Loading...</div>
-            </div>
-          ) : (
-            <>
-              {/* Recent Notes */}
-              {recentNotes.length > 0 && (
-                <div className="mb-6">
-                  <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
-                    <Clock className="h-4 w-4" />
-                    Recent Notes
-                  </div>
-                  <div className="space-y-1 ml-2">
-                    {recentNotes.map((note) => (
+        <div className="relative mb-3">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search notes..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10 bg-sidebar-accent border-sidebar-border focus:ring-sidebar-ring"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Button
+            onClick={createNewNote}
+            className="w-full bg-sidebar-primary hover:bg-sidebar-primary/90 text-sidebar-primary-foreground"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            New Note
+          </Button>
+          <Button onClick={createNewFolder} variant="outline" className="w-full bg-transparent">
+            <FolderClosed className="h-4 w-4 mr-2" />
+            New Folder
+          </Button>
+        </div>
+      </div>
+
+      <ScrollArea className="flex-1 p-2">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <div className="text-sm text-muted-foreground">Loading...</div>
+          </div>
+        ) : (
+          <>
+            {/* Recent Notes */}
+            {recentNotes.length > 0 && (
+              <div className="mb-6">
+                <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
+                  <Clock className="h-4 w-4" />
+                  Recent Notes
+                </div>
+                <div className="space-y-1 ml-2">
+                  {recentNotes.map((note) => (
+                    <div
+                      key={`recent-${note.path}`}
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, note.path)}
+                      onDragEnd={handleDragEnd}
+                      onClick={() => onSelectNote(note.path)}
+                      className={cn(
+                        "group flex items-center justify-between p-2 rounded-md cursor-pointer transition-all duration-200",
+                        selectedNote === note.path
+                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                          : "hover:bg-sidebar-accent/50 text-sidebar-foreground",
+                        draggedItem === note.path && "opacity-50 scale-95",
+                      )}
+                    >
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <FileText className="h-4 w-4 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <span className="truncate text-sm block">{note.name.replace(".md", "")}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(note.modified).toLocaleDateString()}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 hover:bg-sidebar-accent"
+                          onClick={(e) => deleteItem(note.path, e)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* File Tree */}
+            <div className="mb-6">
+              <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
+                <FolderClosed className="h-4 w-4" />
+                Files
+              </div>
+              <div className="ml-2">
+                {searchQuery ? (
+                  // Show filtered flat list when searching
+                  <div className="space-y-1">
+                    {filteredEntries.map((entry) => (
                       <div
-                        id={`recent-${note.path}`}
-                        key={`recent-${note.path}`}
-                        onClick={() => onSelectNote(note.path)}
+                        key={entry.path}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, entry.path)}
+                        onDragEnd={handleDragEnd}
+                        onClick={() => {
+                          if (!entry.is_dir && entry.name.endsWith(".md")) {
+                            onSelectNote(entry.path)
+                          }
+                        }}
                         className={cn(
-                          "group flex items-center justify-between p-2 rounded-md cursor-grab active:cursor-grabbing transition-colors",
-                          selectedNote === note.path
+                          "group flex items-center justify-between p-2 rounded-md cursor-pointer transition-all duration-200",
+                          selectedNote === entry.path
                             ? "bg-sidebar-accent text-sidebar-accent-foreground"
                             : "hover:bg-sidebar-accent/50 text-sidebar-foreground",
-                          draggedItem === note.path && "bg-blue-100 dark:bg-blue-900/30 opacity-50",
+                          draggedItem === entry.path && "opacity-50 scale-95",
                         )}
-                        {...{
-                          role: "button",
-                          onPointerDown: (ev: React.PointerEvent) => {
-                            // mark this as the active drag source for dnd-kit
-                            ;(ev.target as HTMLElement).dataset.dndId = note.path
-                          },
-                          onDragStart: (ev: React.DragEvent) => ev.preventDefault(),
-                        }}
                       >
                         <div className="flex items-center gap-2 flex-1 min-w-0">
-                          <FileText className="h-4 w-4 flex-shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <span className="truncate text-sm block">{note.name.replace(".md", "")}</span>
-                            <span className="text-xs text-muted-foreground">
-                              {new Date(note.modified).toLocaleDateString()}
-                            </span>
-                          </div>
+                          {entry.is_dir ? (
+                            <FolderClosed className="h-4 w-4 flex-shrink-0 text-blue-500" />
+                          ) : (
+                            <FileText className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                          )}
+                          <span className="truncate text-sm">
+                            {entry.is_dir ? entry.name : entry.name.replace(".md", "")}
+                          </span>
                         </div>
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                           <Button
                             variant="ghost"
                             size="icon"
                             className="h-6 w-6 hover:bg-sidebar-accent"
-                            onClick={(e) => deleteItem(note.path, e)}
+                            onClick={(e) => deleteItem(entry.path, e)}
                           >
                             <Trash2 className="h-3 w-3" />
                           </Button>
@@ -825,87 +592,32 @@ export function EnhancedSidebar({
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
-
-              {/* File Tree */}
-              <div className="mb-6">
-                <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium text-muted-foreground">
-                  <FolderClosed className="h-4 w-4" />
-                  Files
-                </div>
-                <div className="ml-2">
-                  {searchQuery ? (
-                    // Show filtered flat list when searching
-                    <div className="space-y-1">
-                      {filteredEntries.map((entry) => (
-                        <div
-                          key={entry.path}
-                          onClick={() => {
-                            if (!entry.is_dir && entry.name.endsWith(".md")) {
-                              onSelectNote(entry.path)
-                            }
-                          }}
-                          className={`group flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors ${
-                            selectedNote === entry.path
-                              ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                              : "hover:bg-sidebar-accent/50 text-sidebar-foreground"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 flex-1 min-w-0">
-                            {entry.is_dir ? (
-                              <FolderClosed className="h-4 w-4 flex-shrink-0 text-blue-500" data-folder="true" />
-                            ) : (
-                              <FileText className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-                            )}
-                            <span className="truncate text-sm">
-                              {entry.is_dir ? entry.name : entry.name.replace(".md", "")}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6 hover:bg-sidebar-accent"
-                              onClick={(e) => deleteItem(entry.path, e)}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    // Show tree structure when not searching
-                    <SortableContext
-                      items={["__ROOT_TOP__", ...fileTree.map((n) => n.entry.path), "__ROOT_BOTTOM__"]}
-                      strategy={verticalListSortingStrategy}
-                    >
-                      <div>
-                        {/* Top spacer droppable for moving to root above first item */}
-                        <div ref={setRootTopRef} className="h-3" />
-                        {fileTree.map((node) => (
-                          <TreeNode key={node.entry.path} node={node} depth={0} />
-                        ))}
-                        {/* Bottom spacer droppable for moving to root below last item */}
-                        <div ref={setRootBottomRef} className="h-6" />
-                      </div>
-                    </SortableContext>
-                  )}
-                </div>
+                ) : (
+                  // Show tree structure when not searching
+                  <div>
+                    {fileTree.map((node) => (
+                      <TreeNode key={node.entry.path} node={node} depth={0} />
+                    ))}
+                  </div>
+                )}
               </div>
+            </div>
 
-              {!isLoading && entries.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <FolderClosed className="h-12 w-12 text-muted-foreground mb-4" />
-                  <p className="text-sm text-muted-foreground mb-2">No files yet</p>
-                  <p className="text-xs text-muted-foreground">Create your first note to get started!</p>
-                </div>
-              )}
-            </>
-          )}
-        </ScrollArea>
-      </aside>
-    </DndContext>
+            {!isLoading && entries.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <FolderClosed className="h-12 w-12 text-muted-foreground mb-4" />
+                <p className="text-sm text-muted-foreground mb-2">No files yet</p>
+                <p className="text-xs text-muted-foreground">Create your first note to get started!</p>
+              </div>
+            )}
+          </>
+        )}
+      </ScrollArea>
+
+      {/* Drop zone indicator for root */}
+      {dragOverTarget === "__ROOT__" && (
+        <div className="absolute inset-0 bg-blue-100/20 dark:bg-blue-900/20 border-2 border-dashed border-blue-400 rounded-lg pointer-events-none" />
+      )}
+    </aside>
   )
 }
